@@ -1,0 +1,30 @@
+# NotiFlow Autonomous — Python dependencies
+# Install: pip install -r requirements.txt
+
+# ── Web framework ────────────────────────────────────────────
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+
+# ── LLM Backends ─────────────────────────────────────────────
+# NVIDIA NIM (primary) — OpenAI-compatible SDK
+openai>=1.30.0
+
+# Google Gemini (fallback)
+google-generativeai>=0.5.0
+
+# ── Data persistence ─────────────────────────────────────────
+pandas>=2.0.0
+openpyxl>=3.1.0
+
+# ── Google Sheets integration ────────────────────────────────
+gspread>=6.0.0
+google-auth>=2.29.0
+
+# ── Utilities ────────────────────────────────────────────────
+websockets>=12.0
+
+# ── REMOVED (AWS Bedrock no longer used) ─────────────────────
+# boto3
+# botocore

@@ -1,0 +1,1 @@
+"""memory/ — compatibility shim package."""

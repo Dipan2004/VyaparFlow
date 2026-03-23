@@ -1,0 +1,1 @@
+"""models/ — compatibility shim package."""

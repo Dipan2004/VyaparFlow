@@ -44,9 +44,28 @@ NVIDIA_NIM_API_KEY : str | None = os.getenv("NVIDIA_NIM_API_KEY")
 NVIDIA_NIM_BASE_URL: str        = os.getenv(
     "NVIDIA_NIM_BASE_URL", "https://integrate.api.nvidia.com/v1"
 )
+# Legacy single-model override (Phase 1-3 compat)
 NVIDIA_NIM_MODEL   : str        = os.getenv(
-    "NVIDIA_NIM_MODEL", "meta/llama-3.1-8b-instruct"
+    "NVIDIA_NIM_MODEL", "deepseek-ai/deepseek-v3"
 )
+# Phase 4: per-role model routing
+NIM_PRIMARY_MODEL  : str        = os.getenv(
+    "NIM_PRIMARY_MODEL",  "deepseek-ai/deepseek-v3"
+)
+NIM_FALLBACK_MODEL : str        = os.getenv(
+    "NIM_FALLBACK_MODEL", "deepseek-ai/deepseek-r1"
+)
+
+# ---------------------------------------------------------------------------
+# OpenRouter settings  (Phase 4 fallback)
+# ---------------------------------------------------------------------------
+
+OPENROUTER_API_KEY : str | None = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_MODEL   : str        = os.getenv(
+    "OPENROUTER_MODEL", "deepseek/deepseek-chat"
+)
+OPENROUTER_REFERER : str        = os.getenv("OPENROUTER_REFERER", "")
+OPENROUTER_TITLE   : str        = os.getenv("OPENROUTER_TITLE",   "NotiFlow")
 
 # ---------------------------------------------------------------------------
 # Gemini settings  (fallback)

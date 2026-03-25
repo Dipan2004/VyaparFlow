@@ -141,4 +141,14 @@ class PredictionAgent(BaseAgent):
             "[PredictionAgent] risk=%s score=%.2f reasons=%d",
             level, score, len(reasons)
         )
+
+        # ── Also contribute to the shared priority score ──────────────────────
+        # High risk contributes 35 pts, medium 15 pts — UrgencyAgent will
+        # combine these with keyword/amount signals to derive the final label.
+        from app.core.priority import contribute_priority_score
+        if level == "high":
+            contribute_priority_score(context, 35, f"Risk level is high (score={score})")
+        elif level == "medium":
+            contribute_priority_score(context, 15, f"Risk level is medium (score={score})")
+
         return context

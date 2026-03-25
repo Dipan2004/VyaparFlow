@@ -41,37 +41,31 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.core.context  import create_context, update_context, log_step, add_error
-from app.core.planner  import build_plan
-from app.core.registry import get_agent
+from app.core.context          import create_context, update_context, log_step, add_error
+from app.core.planner          import build_plan
+from app.core.autonomy_planner import build_autonomy_plan
+from app.core.priority         import reset_priority_score
+from app.core.registry         import get_agent
 
 logger = logging.getLogger(__name__)
 
-# Autonomy layer — runs after every main pipeline execution.
-# Order matters: verification → monitor → prediction → urgency → escalation → recovery
-_AUTONOMY_SEQUENCE = [
-    "verification",
-    "monitor",
-    "prediction",
-    "urgency",
-    "escalation",
-    "recovery",
-]
+_MAX_REPLANS = 2   # hard cap on feedback-loop iterations
 
 
 def process_message(message: str, source: str = "system") -> dict[str, Any]:
     """
     Run a raw business message through the full NotiFlow agent pipeline.
 
-    Phase 2: execution order determined by Planner (dynamic).
-    Phase 3: autonomy layer runs after main pipeline (fixed sequence).
+    Phase 2: main pipeline driven by Planner (dynamic).
+    Phase 3: autonomy layer driven by AutonomyPlanner (dynamic).
+    Fix:     feedback loop — replan up to _MAX_REPLANS times if needed.
 
     Args:
         message: Raw Hinglish or English business message.
         source:  Notification source (e.g. "whatsapp", "gpay").
 
     Returns:
-        Flat result dict matching the existing API contract + full context.
+        Flat result dict + full context.
 
     Raises:
         ValueError: Empty message.
@@ -79,35 +73,69 @@ def process_message(message: str, source: str = "system") -> dict[str, Any]:
     if not message or not message.strip():
         raise ValueError("Message cannot be empty.")
 
-    # ── 1. Initialise context ─────────────────────────────────────────────
     ctx = create_context(message.strip(), source=source)
     logger.info("Orchestrator ← %r (source=%s)", message, source)
 
-    # ── 2. Build execution plan ───────────────────────────────────────────
-    plan = build_plan(ctx)
-    logger.info(
-        "Execution plan: [%s]",
-        ", ".join(step["agent"] for step in plan)
-    )
+    # ── Main plan + autonomy + feedback loop ──────────────────────────────
+    while True:
+        retry_count = ctx["metadata"].get("retry_count", 0)
 
-    # ── 3. Execute main plan dynamically ─────────────────────────────────
-    ctx = _run_plan(ctx, plan)
+        # ── 1. Build and run main plan ────────────────────────────────────
+        plan = build_plan(ctx)
+        logger.info(
+            "[cycle=%d] Main plan: [%s]",
+            retry_count,
+            ", ".join(s["agent"] for s in plan),
+        )
+        ctx = _run_plan(ctx, plan)
 
-    # ── 4. Execute autonomy layer ─────────────────────────────────────────
-    logger.info("Autonomy layer starting")
-    ctx = _run_autonomy(ctx)
+        # ── 2. Build and run autonomy plan ────────────────────────────────
+        autonomy_plan = build_autonomy_plan(ctx)
+        logger.info(
+            "[cycle=%d] Autonomy plan: [%s]",
+            retry_count,
+            ", ".join(s["agent"] for s in autonomy_plan),
+        )
+        ctx = _run_autonomy(ctx, autonomy_plan)
 
-    # ── 5. Mark completed if not already failed ───────────────────────────
+        # ── 3. Check if replan is needed ──────────────────────────────────
+        if retry_count >= _MAX_REPLANS:
+            logger.info("Replan cap reached (%d) — stopping loop.", _MAX_REPLANS)
+            break
+
+        if not _should_replan(ctx):
+            logger.info("[cycle=%d] No replan needed.", retry_count)
+            break
+
+        # ── 4. Prepare for replan ─────────────────────────────────────────
+        logger.warning(
+            "[cycle=%d] Replan triggered — retry_count → %d",
+            retry_count, retry_count + 1,
+        )
+        ctx["metadata"]["retry_count"] = retry_count + 1
+
+        # Reset priority score so contributors don't double-count
+        reset_priority_score(ctx)
+
+        # Clear autonomy outputs so fresh evaluation happens
+        for key in ("verification", "monitor", "risk", "alerts", "recovery"):
+            ctx.pop(key, None)
+
+        # Clear accumulated errors from previous cycle (keep original errors)
+        ctx["errors"] = [e for e in ctx["errors"] if not e.startswith("[Monitor]")]
+
+    # ── Mark final state ──────────────────────────────────────────────────
     if ctx.get("state") not in ("failed",):
         update_context(ctx, state="completed")
 
     logger.info(
-        "Orchestrator → state=%s  intent=%s  errors=%d  risk=%s  priority=%s",
+        "Orchestrator done → state=%s intents=%s errors=%d risk=%s priority=%s score=%d",
         ctx["state"],
-        ctx.get("intent"),
+        ctx.get("intents", [ctx.get("intent")]),
         len(ctx["errors"]),
         ctx.get("risk", {}).get("level", "n/a"),
         ctx.get("priority", "n/a"),
+        ctx.get("priority_score", 0),
     )
 
     return _build_result(ctx)
@@ -152,14 +180,15 @@ def _run_plan(ctx: dict[str, Any], plan: list[dict]) -> dict[str, Any]:
     return ctx
 
 
-def _run_autonomy(ctx: dict[str, Any]) -> dict[str, Any]:
+def _run_autonomy(ctx: dict[str, Any], plan: list[dict]) -> dict[str, Any]:
     """
-    Run the fixed autonomy sequence.
+    Run the dynamically planned autonomy sequence.
 
-    All autonomy agents are non-critical — a failure in any one of them
-    never aborts the sequence or changes the main pipeline result.
+    All autonomy agents are non-critical — failures are recorded but
+    never abort the sequence or corrupt the main pipeline result.
     """
-    for agent_key in _AUTONOMY_SEQUENCE:
+    for step in plan:
+        agent_key = step["agent"]
         try:
             agent = get_agent(agent_key)
         except KeyError:
@@ -168,14 +197,44 @@ def _run_autonomy(ctx: dict[str, Any]) -> dict[str, Any]:
         try:
             ctx = agent.run(ctx)
         except Exception as exc:
-            # Autonomy agents must never crash the response
-            logger.error("[Autonomy] agent '%s' raised %s — continuing", agent_key, exc)
+            logger.error("[Autonomy] '%s' raised %s — continuing", agent_key, exc)
             add_error(ctx, f"[Autonomy] {agent_key} failed: {exc}")
-            # Reset state if autonomy agent set it to failed
             if ctx.get("state") == "failed":
                 update_context(ctx, state="partial")
-
     return ctx
+
+
+def _should_replan(ctx: dict[str, Any]) -> bool:
+    """
+    Return True if the feedback loop should trigger a replan.
+
+    Conditions (any one is sufficient):
+        1. verification.status == "fail"
+        2. risk.level          == "high"
+        3. errors list is non-empty (excluding autonomy-internal noise)
+    """
+    v_status = ctx.get("verification", {}).get("status", "ok")
+    if v_status == "fail":
+        logger.info("[Feedback] replan trigger: verification=fail")
+        return True
+
+    risk_level = ctx.get("risk", {}).get("level", "low")
+    if risk_level == "high":
+        logger.info("[Feedback] replan trigger: risk=high")
+        return True
+
+    # Only count errors that are not pure autonomy-internal noise
+    meaningful_errors = [
+        e for e in ctx.get("errors", [])
+        if not e.startswith("[Autonomy]")
+    ]
+    if meaningful_errors:
+        logger.info(
+            "[Feedback] replan trigger: %d meaningful error(s)", len(meaningful_errors)
+        )
+        return True
+
+    return False
 
 
 def _build_result(ctx: dict[str, Any]) -> dict[str, Any]:
@@ -184,13 +243,16 @@ def _build_result(ctx: dict[str, Any]) -> dict[str, Any]:
         # ── Core (backward compatible) ────────────────────────────────────
         "message":       ctx["message"],
         "intent":        ctx.get("intent") or "other",
+        "intents":       ctx.get("intents") or [ctx.get("intent") or "other"],
         "data":          ctx.get("data", {}),
+        "multi_data":    ctx.get("multi_data", {}),
         "event":         ctx.get("event", {}),
         "sheet_updated": ctx.get("metadata", {}).get("sheet_updated", False),
-        # ── Phase 3: Autonomy fields ──────────────────────────────────────
+        # ── Autonomy fields ───────────────────────────────────────────────
         "verification":  ctx.get("verification", {}),
         "risk":          ctx.get("risk", {}),
-        "priority":      ctx.get("priority", "normal"),
+        "priority":      ctx.get("priority", "low"),
+        "priority_score": ctx.get("priority_score", 0),
         "alerts":        ctx.get("alerts", []),
         "recovery":      ctx.get("recovery", {}),
         "monitor":       ctx.get("monitor", {}),

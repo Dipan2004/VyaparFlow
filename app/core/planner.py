@@ -78,8 +78,15 @@ def _intent_needed(ctx: dict[str, Any]) -> bool:
 
 
 def _extraction_needed(ctx: dict[str, Any]) -> bool:
-    """Run extraction unless structured data already exists."""
-    return not ctx.get("data")
+    """Run extraction unless structured data already exists for all detected intents."""
+    if not ctx.get("data") and not ctx.get("multi_data"):
+        return True
+    # On replan: re-extract if intents changed or multi_data is missing entries
+    intents   = ctx.get("intents") or []
+    multi_data = ctx.get("multi_data", {})
+    if intents and any(i not in multi_data for i in intents):
+        return True
+    return False
 
 
 def _validation_needed(ctx: dict[str, Any]) -> bool:

@@ -3,6 +3,13 @@ api/notification_routes.py
 --------------------------
 FastAPI router for Notiflow notification endpoints.
 
+Phase 5: API now calls process_message() directly (the new multi-agent
+orchestrator) instead of run_notiflow(). Returns the full result including
+intents, multi_data, priority, risk, and alerts.
+
+Backward compatibility: all original fields (message, intent, data, event,
+source, sheet_updated, model) are still present in the response.
+
 Endpoints
 ---------
 POST /api/notification
@@ -27,7 +34,6 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException
-from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -35,27 +41,16 @@ router = APIRouter()
 
 
 # ---------------------------------------------------------------------------
-# Pydantic models
+# Request model
 # ---------------------------------------------------------------------------
+
+from pydantic import BaseModel
+
 
 class NotificationRequest(BaseModel):
     """Incoming notification payload."""
-    source:  str          # e.g. "whatsapp", "amazon", "payment", "return"
-    message: str          # Raw Hinglish business message
-
-
-class NotificationResponse(BaseModel):
-    """
-    Full orchestrator result — same shape as run_notiflow() output.
-    Frontend reads fields from data{} and event{}.
-    """
-    message: str
-    intent:  str
-    data:    dict[str, Any]
-    event:   dict[str, Any]
-    source:  str           # Echo back the notification source
-    sheet_updated: bool = False   # Whether the Google Sheets ledger was updated
-    model:   str | None = None   # "nova" | "gemini" | "demo"
+    source:  str = "system"   # e.g. "whatsapp", "amazon", "payment", "return"
+    message: str              # Raw Hinglish business message
 
 
 # ---------------------------------------------------------------------------
@@ -93,16 +88,61 @@ _manager = _ConnectionManager()
 
 
 # ---------------------------------------------------------------------------
+# Internal: run the pipeline and build the API response dict
+# ---------------------------------------------------------------------------
+
+def _run_pipeline(message: str, source: str) -> dict[str, Any]:
+    """
+    Run the full multi-agent pipeline via process_message() and return
+    a flat API response dict that includes both legacy and new fields.
+    """
+    from app.core.orchestrator import process_message
+
+    result = process_message(message.strip(), source=source)
+
+    # Strip the raw context from the response (keep it lightweight for API)
+    ctx = result.pop("context", {})
+
+    # Determine model tag
+    event_str  = str(result.get("event", {}).get("event", ""))
+    is_live    = any(event_str.endswith(sfx)
+                     for sfx in ("_recorded", "_received", "_requested", "_queued"))
+    model_tag  = "live" if is_live else "demo"
+
+    return {
+        # ── Backward-compatible core fields ──────────────────────────────
+        "message":       result["message"],
+        "intent":        result.get("intent", "other"),
+        "data":          result.get("data", {}),
+        "event":         result.get("event", {}),
+        "source":        source,
+        "sheet_updated": result.get("sheet_updated", False),
+        "model":         model_tag,
+        # ── Phase 5: multi-intent fields ─────────────────────────────────
+        "intents":       result.get("intents", [result.get("intent", "other")]),
+        "multi_data":    result.get("multi_data", {}),
+        # ── Autonomy fields ───────────────────────────────────────────────
+        "priority":      result.get("priority", "low"),
+        "priority_score": result.get("priority_score", 0),
+        "risk":          result.get("risk", {}),
+        "alerts":        result.get("alerts", []),
+        "verification":  result.get("verification", {}),
+        "recovery":      result.get("recovery", {}),
+        "monitor":       result.get("monitor", {}),
+    }
+
+
+# ---------------------------------------------------------------------------
 # POST /api/notification
 # ---------------------------------------------------------------------------
 
-@router.post("/api/notification", response_model=NotificationResponse)
+@router.post("/api/notification")
 async def process_notification(body: NotificationRequest):
     """
     Receive a business notification and run the full Notiflow pipeline.
 
-    The endpoint calls run_notiflow(message) from app/main.py — it does
-    not call agents or skills directly.
+    Uses process_message() from app.core.orchestrator — the new multi-agent
+    system with dynamic planner, autonomy planner, and multi-intent support.
 
     After processing, the result is broadcast to all connected WebSocket
     clients so the live stream panel updates in real time.
@@ -111,36 +151,24 @@ async def process_notification(body: NotificationRequest):
         body: {"source": "whatsapp", "message": "bhaiya 3 kurti bhej dena"}
 
     Returns:
-        Full orchestrator result + source echo.
+        Full orchestrator result including intents, multi_data, priority, risk.
     """
     if not body.message or not body.message.strip():
         raise HTTPException(status_code=422, detail="Message cannot be empty.")
 
-    logger.info("POST /api/notification | source=%s | msg=%r", body.source, body.message)
+    logger.info(
+        "POST /api/notification | source=%s | msg=%r",
+        body.source, body.message
+    )
 
     try:
-        from app.main import run_notiflow
-        result = run_notiflow(body.message.strip(), source=body.source)
+        response = _run_pipeline(body.message.strip(), body.source)
     except Exception as exc:
         logger.error("Pipeline error: %s", exc)
         raise HTTPException(status_code=500, detail=f"Pipeline error: {exc}")
 
-    response = NotificationResponse(
-        message = result["message"],
-        intent  = result["intent"],
-        data    = result["data"],
-        event   = result["event"],
-        source  = body.source,
-        sheet_updated = result.get("sheet_updated", False),
-        model   = "demo" if not result["event"].get("event", "").endswith("_recorded")
-                         and not result["event"].get("event", "").endswith("_received")
-                         and not result["event"].get("event", "").endswith("_requested")
-                         and not result["event"].get("event", "").endswith("_queued")
-                  else "live",
-    )
-
-    # Broadcast to WebSocket clients
-    await _manager.broadcast(response.model_dump())
+    # Broadcast full result to WebSocket clients
+    await _manager.broadcast(response)
 
     return response
 
@@ -187,7 +215,7 @@ async def websocket_notification_stream(websocket: WebSocket):
 
     Protocol:
         Client → Server:  {"source": str, "message": str}
-        Server → Client:  NotificationResponse JSON
+        Server → Client:  Full pipeline result JSON (same shape as POST response)
     """
     await _manager.connect(websocket)
     try:
@@ -202,17 +230,7 @@ async def websocket_notification_stream(websocket: WebSocket):
                     await websocket.send_json({"error": "Empty message"})
                     continue
 
-                from app.main import run_notiflow
-                result = run_notiflow(message, source=source)
-
-                response = {
-                    "message":       result["message"],
-                    "intent":        result["intent"],
-                    "data":          result["data"],
-                    "event":         result["event"],
-                    "source":        source,
-                    "sheet_updated": result.get("sheet_updated", False),
-                }
+                response = _run_pipeline(message, source)
                 await _manager.broadcast(response)
 
             except json.JSONDecodeError:

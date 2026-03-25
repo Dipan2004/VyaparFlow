@@ -48,7 +48,7 @@ class EscalationAgent(BaseAgent):
     action      = "Raise alerts and simulate notifications for critical situations"
 
     def execute(self, context: dict[str, Any]) -> dict[str, Any]:
-        priority = (context.get("priority") or "normal").lower()
+        priority = (context.get("priority") or "low").lower()
         risk     = context.get("risk", {})
         errors   = context.get("errors", [])
         intent   = (context.get("intent") or "other").lower()
@@ -56,13 +56,14 @@ class EscalationAgent(BaseAgent):
 
         alerts: list[dict[str, Any]] = []
 
-        # ── Trigger 1: critical priority ─────────────────────────────────────
-        if priority == "critical":
+        # ── Trigger 1: high priority score (was "critical" in old model) ─────
+        score = context.get("priority_score", 0)
+        if score >= 80:
             alert = self._build_alert(
                 level   = "critical",
-                trigger = "priority=critical",
+                trigger = f"priority_score={score}",
                 message = (
-                    f"CRITICAL priority transaction detected. "
+                    f"CRITICAL priority score {score}/100. "
                     f"Intent: {intent}. "
                     f"Customer: {data.get('customer', 'unknown')}."
                 ),
@@ -70,15 +71,16 @@ class EscalationAgent(BaseAgent):
             alerts.append(alert)
             self._notify(alert)
 
-        # ── Trigger 2: high priority ─────────────────────────────────────────
+        # ── Trigger 2: high priority label ───────────────────────────────────
         elif priority == "high":
             alert = self._build_alert(
                 level   = "warning",
-                trigger = "priority=high",
+                trigger = f"priority=high score={score}",
                 message = (
                     f"High priority transaction flagged. "
                     f"Intent: {intent}. "
-                    f"Reason: {context.get('metadata', {}).get('urgency_reason', 'unknown')}."
+                    f"Score: {score}/100. "
+                    f"Reason: {context.get('metadata', {}).get('urgency_reason', 'n/a')}."
                 ),
             )
             alerts.append(alert)

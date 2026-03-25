@@ -27,7 +27,6 @@ import logging
 from pathlib import Path
 
 import pandas as pd
-from openpyxl import load_workbook, Workbook
 
 from app.config import DATA_FILE   # FIX 4: single source of truth
 
@@ -66,6 +65,7 @@ SHEET_SCHEMAS: dict[str, list[str]] = {
 
 def _ensure_file() -> None:
     """Create the Excel file with all sheets if it does not exist."""
+    from openpyxl import Workbook  # lazy import — not needed at module load time
     if EXCEL_FILE.exists():
         return
 
@@ -84,7 +84,7 @@ def _ensure_file() -> None:
     logger.info("Excel file created with sheets: %s", list(SHEET_SCHEMAS.keys()))
 
 
-def _ensure_sheet(wb: Workbook, sheet_name: str) -> None:
+def _ensure_sheet(wb, sheet_name: str) -> None:
     if sheet_name not in wb.sheetnames:
         ws = wb.create_sheet(title=sheet_name)
         columns = SHEET_SCHEMAS.get(sheet_name, [])
@@ -115,6 +115,7 @@ def append_row(sheet_name: str, record: dict) -> None:
             f"Unknown sheet '{sheet_name}'. Valid: {list(SHEET_SCHEMAS)}"
         )
 
+    from openpyxl import load_workbook  # lazy import
     _ensure_file()
     wb = load_workbook(EXCEL_FILE)
     _ensure_sheet(wb, sheet_name)
@@ -134,6 +135,7 @@ def append_rows(sheet_name: str, records: list[dict]) -> None:
     if sheet_name not in SHEET_SCHEMAS:
         raise ValueError(f"Unknown sheet '{sheet_name}'.")
 
+    from openpyxl import load_workbook  # lazy import
     _ensure_file()
     wb = load_workbook(EXCEL_FILE)
     _ensure_sheet(wb, sheet_name)

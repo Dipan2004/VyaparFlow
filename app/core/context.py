@@ -17,8 +17,11 @@ Structure
     "state":     str,           # pipeline lifecycle state
     "history":   list[dict],    # audit-level agent execution log  ← UPGRADED
     "errors":    list[str],     # non-fatal errors accumulated during run
-    "priority":  str,           # "normal" | "high" | "low"
-    "plan":      list[dict],    # ordered plan steps (set by Planner)
+    "priority":              str,           # "low" | "medium" | "high" (derived by UrgencyAgent)
+    "priority_score":        int,           # additive score 0-100 (contributed by multiple agents)
+    "priority_score_reasons": list[dict],  # audit trail of score contributions
+    "plan":          list[dict],   # ordered main plan steps (set by Planner)
+    "autonomy_plan": list[dict],   # ordered autonomy steps (set by AutonomyPlanner)
     "metadata":  dict,          # source, sheet_updated, model, etc.
 }
 
@@ -68,19 +71,27 @@ def create_context(message: str, source: str = "system") -> dict[str, Any]:
     """
     return {
         "message":  message.strip(),
-        "intent":   None,
-        "data":     {},
+        # ── Intent (Phase 5: multi-intent) ────────────────────────────────
+        "intents":  [],     # all detected intents, ordered (set by IntentAgent)
+        "intent":   None,   # primary intent = intents[0] — kept for backward compat
+        # ── Extraction ────────────────────────────────────────────────────
+        "multi_data": {},   # per-intent extracted fields {intent_name: {fields}}
+        "data":     {},     # primary intent extraction — kept for backward compat
         "event":    {},
         "state":    "initialized",
         "history":  [],
         "errors":   [],
-        "priority": "normal",
+        "priority": "normal",           # final derived label (set by UrgencyAgent)
+        "priority_score": 0,            # additive score 0-100 (Phase 3 fix)
+        "priority_score_reasons": [],   # audit trail of score contributions
         # plan is [] until Planner fills it; list[dict] in Phase 2
-        "plan":     [],
+        "plan":          [],
+        "autonomy_plan": [],            # filled by autonomy_planner
         "metadata": {
             "source":        source,
             "sheet_updated": False,
             "model":         None,
+            "retry_count":   0,         # replan loop counter
             "created_at":    datetime.now(timezone.utc).isoformat(),
         },
     }

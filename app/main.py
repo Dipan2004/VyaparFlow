@@ -146,19 +146,20 @@ def run_notiflow(
     """
     Run a business message through the full NotiFlow pipeline.
 
+    .. deprecated::
+        The API layer (notification_routes.py) now calls
+        ``app.core.orchestrator.process_message()`` directly.
+        ``run_notiflow`` is kept for:
+          - Demo mode (static responses + keyword fallback)
+          - CLI usage  (python app/main.py "...")
+          - Backward-compat tests that mock it
+
+        New code should use ``process_message()`` directly.
+
     Args:
         message:   Raw Hinglish or English business message.
         demo_mode: Override DEMO_MODE from config. None = use config value.
         source:    Notification source (e.g. "whatsapp", "gpay").
-
-    Returns:
-        {
-            "message":       str,
-            "intent":        str,
-            "data":          dict,
-            "event":         dict,
-            "sheet_updated": bool,
-        }
     """
     if not message or not message.strip():
         raise ValueError("Message cannot be empty.")

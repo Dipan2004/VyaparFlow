@@ -4,11 +4,15 @@ Your job is to extract structured business information from a message written in
 
 You will be given:
 1. A business message
-2. The already-detected intent of the message
+2. One or more already-detected intents
 
 ## Your Task
 
-Extract all relevant business fields from the message based on the intent.
+Extract all relevant business fields from the message for EACH intent provided.
+
+- If there is ONE intent: return a flat JSON object with the fields for that intent.
+- If there are MULTIPLE intents: return a JSON object where each key is an intent name and its value is an object with extracted fields.
+
 Return ONLY a valid JSON object. No explanation. No markdown. No extra text.
 
 ---
@@ -73,50 +77,46 @@ Extract:
 ## Rules
 
 1. Always return a JSON object. Never return plain text.
-2. Always include the "intent" field using the intent you were given.
-3. If a field is not present in the message, set it to null.
-4. Never guess or hallucinate values not present in the message.
-5. Normalize names to Title Case (e.g., "rahul" → "Rahul").
-6. Normalize items to simple English nouns (e.g., "kurti" → "kurti", "maal" → "goods").
-7. Extract numbers as integers or floats, not strings.
-8. Do not include any field not listed for the given intent.
+2. If a field is not present in the message, set it to null.
+3. Never guess or hallucinate values not present in the message.
+4. Normalize names to Title Case (e.g., "rahul" → "Rahul").
+5. Normalize items to simple English nouns (e.g., "kurti" → "kurti", "maal" → "goods").
+6. Extract numbers as integers or floats, not strings.
+7. Do not include any field not listed for the given intent.
+8. For multi-intent: use a keyed object — each key is the intent name.
 
 ---
 
-## Examples
+## Single-Intent Examples
 
 Intent: payment
 Message: "rahul ne 15000 bheja"
-Output: {"intent": "payment", "customer": "Rahul", "amount": 15000, "payment_type": null}
+Output: {"customer": "Rahul", "amount": 15000, "payment_type": null}
 
 Intent: order
 Message: "bhaiya 3 kurti bhej dena"
-Output: {"intent": "order", "customer": null, "item": "kurti", "quantity": 3}
-
-Intent: order
-Message: "priya ke liye 2 kilo aata bhej dena"
-Output: {"intent": "order", "customer": "Priya", "item": "aata", "quantity": 2}
+Output: {"customer": null, "item": "kurti", "quantity": 3}
 
 Intent: return
 Message: "size chota hai exchange karna hai"
-Output: {"intent": "return", "customer": null, "item": null, "reason": "size issue"}
+Output: {"customer": null, "item": null, "reason": "size issue"}
 
-Intent: credit
-Message: "suresh ko udhar me 500 ka maal dena"
-Output: {"intent": "credit", "customer": "Suresh", "item": "goods", "quantity": null, "amount": 500}
+---
 
-Intent: preparation
-Message: "3 kurti ka set ready rakhna"
-Output: {"intent": "preparation", "item": "kurti", "quantity": 3}
+## Multi-Intent Examples
 
-Intent: payment
-Message: "amit bhai ka 8000 gpay se aaya"
-Output: {"intent": "payment", "customer": "Amit", "amount": 8000, "payment_type": "upi"}
+Intents: payment, order
+Message: "rahul ne 5000 bheja aur 5 kurti bhej dena"
+Output: {"payment": {"customer": "Rahul", "amount": 5000, "payment_type": null}, "order": {"customer": null, "item": "kurti", "quantity": 5}}
+
+Intents: payment, credit
+Message: "suresh ne 3000 diya aur 2 kilo atta udhar le gaya"
+Output: {"payment": {"customer": "Suresh", "amount": 3000, "payment_type": null}, "credit": {"customer": "Suresh", "item": "atta", "quantity": 2, "amount": null}}
 
 ---
 
 Now extract fields from the following:
 
-Intent: {intent}
+Intents: {intents}
 Message: "{message}"
 Output:

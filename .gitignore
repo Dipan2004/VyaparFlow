@@ -115,6 +115,9 @@ desktop.ini
 # Node (if frontend is ever added)
 # ---------------------------------------------------------------------------
 node_modules/
+.eslintcache
+.stylelintcache
+.node_repl_history
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

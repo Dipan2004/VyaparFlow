@@ -25,7 +25,7 @@ export function AgentGraph() {
 
   // Auto-scroll to active node
   useEffect(() => {
-    if (state === 'simulating' && scrollContainerRef.current) {
+    if (state === 'processing' && scrollContainerRef.current) {
       const activeElement = scrollContainerRef.current.querySelector('[data-active="true"]')
       if (activeElement) {
         activeElement.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })

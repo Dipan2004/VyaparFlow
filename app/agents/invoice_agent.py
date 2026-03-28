@@ -6,15 +6,9 @@ from typing import Any
 from app.core.base_agent import BaseAgent
 from app.core.context import update_context
 from app.core.event_bus import emit_event, push_live_log, store_invoice
-from app.services.invoice_service import InvoiceBuilder
+from app.services.invoice_service import InvoiceBuilder, CATALOG_PRICES
 
 logger = logging.getLogger(__name__)
-
-PRICE_MAP = {
-    "kurti": 50.0,
-    "sugar": 50.0,
-    "atta": 40.0,
-}
 
 
 class InvoiceAgent(BaseAgent):
@@ -37,7 +31,7 @@ class InvoiceAgent(BaseAgent):
             )
             return context
 
-        builder = InvoiceBuilder(catalog_prices=PRICE_MAP)
+        builder = InvoiceBuilder(catalog_prices=CATALOG_PRICES)
         invoice = builder.build(
             customer=data.get("customer") or "Walk-in customer",
             item=data.get("item"),

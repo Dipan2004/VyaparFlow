@@ -28,6 +28,7 @@ import logging
 from typing import Any
 
 from app.core.context import log_step, add_error, update_context
+from app.core.event_bus import emit_event
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,26 @@ class BaseAgent:
             Exception: Re-raises any exception from execute() so the
                        orchestrator can decide whether to abort.
         """
+        # Emit step started immediately - real-time feedback
+        emit_event(
+            context,
+            "pipeline_step",
+            {"step": self.name.lower(), "status": "started", "detail": f"{self.name} started processing"},
+            agent=self.name,
+            step=self.name.lower(),
+            message=f"{self.name} started",
+        )
+
+        # Emit log for started state
+        emit_event(
+            context,
+            "log",
+            {"step": self.name.lower(), "status": "info", "message": f"[{self.name}] Started processing..."},
+            agent=self.name,
+            step=self.name.lower(),
+            message=f"[{self.name}] Started processing...",
+        )
+
         logger.info("[%s] starting", self.name)
         try:
             context = self.execute(context)
@@ -86,6 +107,27 @@ class BaseAgent:
                 input_keys  = list(self.input_keys),
                 output_keys = list(self.output_keys),
             )
+
+            # Emit step completed immediately - real-time feedback
+            emit_event(
+                context,
+                "pipeline_step",
+                {"step": self.name.lower(), "status": "completed", "detail": f"{self.name} completed successfully"},
+                agent=self.name,
+                step=self.name.lower(),
+                message=f"{self.name} completed",
+            )
+
+            # Emit log for completed state
+            emit_event(
+                context,
+                "log",
+                {"step": self.name.lower(), "status": "success", "message": f"[{self.name}] Completed successfully"},
+                agent=self.name,
+                step=self.name.lower(),
+                message=f"[{self.name}] Completed successfully",
+            )
+
             logger.info("[%s] completed successfully", self.name)
         except Exception as exc:
             error_msg = f"{self.name} failed: {exc}"
@@ -100,6 +142,27 @@ class BaseAgent:
                 input_keys  = list(self.input_keys),
                 output_keys = [],
             )
+
+            # Emit step error immediately - real-time feedback
+            emit_event(
+                context,
+                "pipeline_step",
+                {"step": self.name.lower(), "status": "failed", "detail": str(exc)},
+                agent=self.name,
+                step=self.name.lower(),
+                message=f"{self.name} failed: {exc}",
+            )
+
+            # Emit log for error state
+            emit_event(
+                context,
+                "log",
+                {"step": self.name.lower(), "status": "error", "message": f"[{self.name}] Error: {exc}"},
+                agent=self.name,
+                step=self.name.lower(),
+                message=f"[{self.name}] Error: {exc}",
+            )
+
             update_context(context, state="failed")
             raise
         return context

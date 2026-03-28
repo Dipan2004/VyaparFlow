@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.core.base_agent import BaseAgent
+from app.core.event_bus import emit_notification
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ class EscalationAgent(BaseAgent):
                 ),
             )
             alerts.append(alert)
-            self._notify(alert)
+            self._notify(alert, context)
 
         # ── Trigger 2: high priority label ───────────────────────────────────
         elif priority == "high":
@@ -84,7 +85,7 @@ class EscalationAgent(BaseAgent):
                 ),
             )
             alerts.append(alert)
-            self._notify(alert)
+            self._notify(alert, context)
 
         # ── Trigger 3: high risk ─────────────────────────────────────────────
         if risk.get("level") in _ESCALATION_RISKS:
@@ -95,7 +96,7 @@ class EscalationAgent(BaseAgent):
                 message = f"High risk transaction. Reasons: {risk_reasons}",
             )
             alerts.append(alert)
-            self._notify(alert)
+            self._notify(alert, context)
 
         # ── Trigger 4: critical errors in pipeline ───────────────────────────
         critical_errors = [e for e in errors if "[Monitor]" in e]
@@ -131,13 +132,25 @@ class EscalationAgent(BaseAgent):
         }
 
     @staticmethod
-    def _notify(alert: dict[str, Any]) -> None:
+    def _notify(alert: dict[str, Any], context: dict[str, Any] | None = None) -> None:
         """
         Simulate sending an external notification.
         Replace this method with a real webhook/SMS/email integration.
+
+        Also emits a phone notification instantly for high-risk situations.
         """
         alert["notified"] = True
         logger.warning(
             "[EscalationAgent] 🚨 ALERT [%s] %s",
             alert["level"].upper(), alert["message"]
         )
+
+        # Emit phone notification immediately for high-risk situations
+        if alert.get("trigger") == "risk=high" or alert.get("level") == "critical":
+            emit_notification(
+                context,
+                category="alert",
+                title="⚠️ High Risk Detected",
+                message=alert["message"],
+                priority="critical",
+            )

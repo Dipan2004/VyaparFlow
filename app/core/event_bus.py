@@ -35,6 +35,18 @@ def push_live_log(ctx: dict[str, Any] | None, entry: dict[str, Any]) -> dict[str
     return log_entry
 
 
+def _dispatch_realtime_event(ctx: dict[str, Any] | None, event: dict[str, Any]) -> None:
+    if ctx is None:
+        return
+    callback = ctx.get("_step_callback")
+    if callback is None:
+        return
+    try:
+        callback(deepcopy(event))
+    except Exception:
+        pass
+
+
 def get_logs(limit: int | None = None) -> list[dict[str, Any]]:
     logs = list(_LOG_BUFFER)
     if limit is not None:
@@ -72,6 +84,7 @@ def emit_event(
     if ctx is not None:
         ctx.setdefault("events", []).append(event)
     _EVENT_BUFFER.append(event)
+    _dispatch_realtime_event(ctx, event)
 
     invoice_id = payload.get("invoice_id") or payload.get("id")
     if invoice_id and isinstance(payload.get("items"), list):
@@ -82,6 +95,56 @@ def emit_event(
 
 def emit_global_event(event_type: str, payload: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
     return emit_event(None, event_type, payload, **kwargs)
+
+
+def emit_notification(
+    ctx: dict[str, Any] | None,
+    category: str,
+    title: str,
+    message: str,
+    priority: str = "normal",
+    **extra: Any,
+) -> dict[str, Any]:
+    """
+    Emit a 'notification' type event for display on the phone screen.
+
+    Args:
+        ctx:      Request context (may be None for global events)
+        category: "invoice" | "payment" | "alert"
+        title:    Short title for the notification
+        message:  Detailed message text
+        priority: "normal" | "critical"
+        **extra:  Additional fields to include in payload
+
+    Returns:
+        The emitted event dict
+    """
+    payload = {
+        "category": category,
+        "title": title,
+        "message": message,
+        "priority": priority,
+        **extra,
+    }
+    return emit_event(
+        ctx,
+        "notification",
+        payload,
+        agent="NotificationSystem",
+        step="notification",
+        message=f"{title}: {message}",
+    )
+
+
+def emit_global_notification(
+    category: str,
+    title: str,
+    message: str,
+    priority: str = "normal",
+    **extra: Any,
+) -> dict[str, Any]:
+    """Emit a notification without a request context."""
+    return emit_notification(None, category, title, message, priority, **extra)
 
 
 def get_events(limit: int | None = None) -> list[dict[str, Any]]:

@@ -83,7 +83,6 @@ def process_order(data: dict, context: dict | None = None) -> dict:
         item      = item,
         quantity  = quantity,
         order_id  = order_id,
-        unit_price = 50.0,
     )
     invoice = store_invoice(invoice)
     append_row("Invoices", invoice)

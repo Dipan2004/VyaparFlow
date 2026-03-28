@@ -20,8 +20,7 @@ Plan output shape (written to context["plan"]):
         {"agent": "intent",     "critical": True},
         {"agent": "extraction", "critical": True},
         {"agent": "validation", "critical": True},
-        {"agent": "invoice_agent", "critical": True},
-        {"agent": "payment_agent", "critical": True},
+        {"agent": "router",     "critical": True},
         {"agent": "ledger",     "critical": False},
     ]
 
@@ -95,14 +94,12 @@ def _validation_needed(ctx: dict[str, Any]) -> bool:
     return ctx.get("state") != "validated"
 
 
-def _invoice_needed(ctx: dict[str, Any]) -> bool:
-    """Generate an invoice for order workflows when not already present."""
-    return (ctx.get("intent") or "").lower() == "order" and not ctx.get("invoice")
-
-
-def _payment_needed(ctx: dict[str, Any]) -> bool:
-    """Create pending payment state after invoice generation."""
-    return (ctx.get("intent") or "").lower() == "order" and not ctx.get("payment")
+def _router_needed(ctx: dict[str, Any]) -> bool:
+    """
+    Run skill routing unless an event was already produced (e.g. on replan
+    when the skill already fired successfully in a previous cycle).
+    """
+    return not ctx.get("event")
 
 
 def _ledger_needed(ctx: dict[str, Any]) -> bool:
@@ -111,6 +108,40 @@ def _ledger_needed(ctx: dict[str, Any]) -> bool:
     We still attempt it on partial failures so any partial data is recorded.
     """
     return True   # always attempt — LedgerAgent is non-fatal anyway
+
+
+def _invoice_agent_needed(ctx: dict[str, Any]) -> bool:
+    """
+    Run invoice agent for order intents that haven't generated an invoice yet.
+    Also runs if message contains order-related keywords.
+    """
+    if ctx.get("invoice"):
+        return False  # already have invoice
+    # Check intent if available
+    intent = (ctx.get("intent") or "").lower()
+    intents = ctx.get("intents") or []
+    # Also check message content for keywords
+    message = (ctx.get("message") or "").lower()
+    has_order_keyword = any(kw in message for kw in ['bhej', 'bhejna', 'order', 'chahiye', 'dena', 'karna'])
+    # Run for order intents or any intent with structured data or order keywords in message
+    return intent == "order" or "order" in intents or bool(ctx.get("data", {}).get("item")) or has_order_keyword
+
+
+def _payment_agent_needed(ctx: dict[str, Any]) -> bool:
+    """
+    Run payment agent for payment intents that haven't been processed yet.
+    Also runs if message contains payment-related keywords.
+    """
+    if ctx.get("payment"):
+        return False  # already have payment
+    # Check intent if available
+    intent = (ctx.get("intent") or "").lower()
+    intents = ctx.get("intents") or []
+    # Also check message content for keywords
+    message = (ctx.get("message") or "").lower()
+    has_payment_keyword = any(kw in message for kw in ['payment', 'paid', 'bheja', 'bhej', 'transfer', 'upi', 'gpay', 'pay', 'kiya'])
+    # Run for payment intents or credit intents or payment keywords
+    return intent in ("payment", "credit") or any(i in ("payment", "credit") for i in intents) or has_payment_keyword
 
 
 _RULES: list[PlanRule] = [
@@ -133,16 +164,22 @@ _RULES: list[PlanRule] = [
         description = "Normalise and validate extracted data",
     ),
     PlanRule(
-        agent       = "invoice_agent",
-        condition   = _invoice_needed,
+        agent       = "router",
+        condition   = _router_needed,
         critical    = True,
-        description = "Generate structured invoice from validated data",
+        description = "Route validated data to the correct business skill",
+    ),
+    PlanRule(
+        agent       = "invoice_agent",
+        condition   = _invoice_agent_needed,
+        critical    = False,
+        description = "Generate invoice for order intents",
     ),
     PlanRule(
         agent       = "payment_agent",
-        condition   = _payment_needed,
-        critical    = True,
-        description = "Prepare pending payment workflow",
+        condition   = _payment_agent_needed,
+        critical    = False,
+        description = "Process payment for payment intents",
     ),
     PlanRule(
         agent       = "ledger",
@@ -178,11 +215,11 @@ def build_plan(context: dict[str, Any]) -> list[dict[str, Any]]:
         >>> ctx = create_context("rahul ne 15000 bheja")
         >>> build_plan(ctx)
         [
-            {"agent": "intent",     "critical": True,  "description": "..."},
-            {"agent": "extraction", "critical": True,  "description": "..."},
-            {"agent": "validation", "critical": True,  "description": "..."},
-            {"agent": "router",     "critical": True,  "description": "..."},
-            {"agent": "ledger",     "critical": False, "description": "..."},
+            {"agent": "intent",      "critical": True,  "description": "Classify business intent from message"},
+            {"agent": "extraction",  "critical": True,  "description": "Extract structured fields from message"},
+            {"agent": "validation",  "critical": True,  "description": "Normalise and validate extracted data"},
+            {"agent": "router",      "critical": True,  "description": "Route validated data to the correct business skill"},
+            {"agent": "ledger",      "critical": False, "description": "Sync transaction to Google Sheets ledger"},
         ]
     """
     plan = []

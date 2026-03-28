@@ -38,6 +38,7 @@ from fastapi.responses import StreamingResponse
 from app.core.event_bus import (
     confirm_invoice_payment,
     emit_global_event,
+    emit_global_notification,
     get_events_since,
     get_latest_event_sequence,
     get_logs,
@@ -47,6 +48,22 @@ from app.core.event_bus import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# Startup safety check
+# ---------------------------------------------------------------------------
+
+def _warn_if_demo_mode() -> None:
+    """Log a loud warning when demo mode is active so operators notice it."""
+    from app.config import DEMO_MODE
+    if DEMO_MODE:
+        logger.warning(
+            "⚠️  DEMO MODE IS ACTIVE — no LLM calls will be made and the live "
+            "pipeline will NOT execute.  Set NOTIFLOW_DEMO_MODE=false in your "
+            ".env file before deploying to production."
+        )
+
+_warn_if_demo_mode()
 
 
 # ---------------------------------------------------------------------------
@@ -101,17 +118,42 @@ _manager = _ConnectionManager()
 
 
 # ---------------------------------------------------------------------------
-# Internal: run the pipeline and build the API response dict
+# Per-step streaming support
 # ---------------------------------------------------------------------------
 
-def _run_pipeline(message: str, source: str) -> dict[str, Any]:
+import queue as _queue_module
+
+
+def _run_pipeline(
+    message: str,
+    source: str,
+    step_queue: "_queue_module.Queue | None" = None,
+) -> dict[str, Any]:
     """
     Run the full multi-agent pipeline via process_message() and return
     a flat API response dict that includes both legacy and new fields.
+
+    If step_queue is provided, each pipeline step emits a dict into it
+    so the caller can stream incremental updates to connected clients
+    before the final result is ready.
     """
     from app.core.orchestrator import process_message
 
-    result = process_message(message.strip(), source=source)
+    # Build the step callback that the orchestrator will call after each step.
+    # It is thread-safe (queue.put is GIL-safe) and never raises.
+    step_cb = None
+    if step_queue is not None:
+        def step_cb(payload: dict) -> None:  # noqa: E306
+            try:
+                step_queue.put_nowait(payload)
+            except Exception:
+                pass
+
+    result = process_message(
+        message.strip(),
+        source=source,
+        step_callback=step_cb,
+    )
 
     # Strip the raw context from the response (keep it lightweight for API)
     ctx = result.pop("context", {})
@@ -159,6 +201,27 @@ async def _broadcast_pipeline_response(response: dict[str, Any]) -> None:
         await _manager.broadcast({"type": "domain_event", "event": event})
 
 
+async def _drain_step_queue(q: "_queue_module.Queue") -> None:
+    """
+    Drain pipeline events from a thread-safe queue and broadcast them
+    to all connected WebSocket clients. Runs concurrently with the pipeline
+    executor so the frontend receives incremental updates in real time.
+    Terminates automatically when a sentinel None value is received.
+    """
+    while True:
+        try:
+            payload = q.get_nowait()
+        except _queue_module.Empty:
+            await asyncio.sleep(0.01)
+            continue
+        if payload is None:          # sentinel: pipeline finished
+            break
+        try:
+            await _manager.broadcast(payload)
+        except Exception:
+            pass  # never let broadcast errors kill the drain loop
+
+
 # ---------------------------------------------------------------------------
 # POST /api/notification
 # ---------------------------------------------------------------------------
@@ -171,8 +234,8 @@ async def process_notification(body: NotificationRequest):
     Uses process_message() from app.core.orchestrator — the new multi-agent
     system with dynamic planner, autonomy planner, and multi-intent support.
 
-    After processing, the result is broadcast to all connected WebSocket
-    clients so the live stream panel updates in real time.
+    Streams per-step pipeline events to all connected WebSocket clients while
+    the pipeline is still running, then broadcasts the final result.
 
     Args:
         body: {"source": "whatsapp", "message": "bhaiya 3 kurti bhej dena"}
@@ -189,11 +252,28 @@ async def process_notification(body: NotificationRequest):
     )
     print("🔥 RECEIVED MESSAGE:", body.message)
 
+    # Create a thread-safe queue so the executor thread can push incremental
+    # step events that the async drain task forwards to WebSocket clients.
+    step_q: _queue_module.Queue = _queue_module.Queue()
+    drain_task = asyncio.create_task(_drain_step_queue(step_q))
+
     try:
-        response = _run_pipeline(body.message.strip(), body.source)
+        # Run the synchronous (blocking) pipeline in a thread-pool executor so
+        # it does not block the async event loop during LLM HTTP calls.
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None, _run_pipeline, body.message.strip(), body.source, step_q
+        )
     except Exception as exc:
         logger.error("Pipeline error: %s", exc)
+        step_q.put_nowait(None)       # unblock the drain task
+        await drain_task
         raise HTTPException(status_code=500, detail=f"Pipeline error: {exc}")
+
+    # Signal the drain task that the pipeline is finished, then wait for it
+    # to flush any remaining queued events before we broadcast the final result.
+    step_q.put_nowait(None)
+    await drain_task
 
     # Broadcast full result to WebSocket clients
     await _broadcast_pipeline_response(response)
@@ -219,7 +299,7 @@ async def stream_events(request: Request):
                 last_sequence = max(last_sequence, int(event.get("sequence", 0)))
                 yield f"data: {json.dumps(event)}\n\n"
 
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(0.05)
 
     return StreamingResponse(
         event_generator(),
@@ -270,6 +350,17 @@ async def confirm_payment(body: PaymentConfirmRequest):
         step="payment",
         message=f"Payment confirmed for {invoice_id}",
         log_entry=payment_log,
+    )
+
+    # Emit phone notification
+    amount = invoice.get("total") or invoice.get("total_amount") or 0
+    emit_global_notification(
+        category="payment",
+        title="✅ Payment Confirmed",
+        message=f"{invoice_id} • ₹{amount:,} received",
+        priority="normal",
+        invoice_id=invoice_id,
+        amount=amount,
     )
 
     response = {
@@ -342,7 +433,8 @@ async def websocket_notification_stream(websocket: WebSocket):
                     await websocket.send_json({"error": "Empty message"})
                     continue
 
-                response = _run_pipeline(message, source)
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(None, _run_pipeline, message, source)
                 await _broadcast_pipeline_response(response)
 
             except json.JSONDecodeError:

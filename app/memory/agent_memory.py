@@ -28,12 +28,16 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Optional
 
 from app.config import MEMORY_FILE
 
 logger = logging.getLogger(__name__)
+
+# Thread safety: protect concurrent read-modify-write of memory file
+_memory_lock = threading.Lock()
 
 _MAX_ENTRIES = 10
 
@@ -119,6 +123,8 @@ def update_memory(
     None values are silently ignored.
     Duplicates are deduplicated and moved to the end (most recent position).
 
+    Thread-safe: protected against concurrent read-modify-write race conditions.
+
     Args:
         customer: Customer name to remember (e.g. "Rahul").
         item:     Item name to remember (e.g. "kurti").
@@ -129,17 +135,18 @@ def update_memory(
     if customer is None and item is None:
         return
 
-    memory = _read_file()
+    with _memory_lock:
+        memory = _read_file()
 
-    if customer:
-        memory["recent_customers"] = _append_unique(
-            memory["recent_customers"], str(customer).strip()
-        )
+        if customer:
+            memory["recent_customers"] = _append_unique(
+                memory["recent_customers"], str(customer).strip()
+            )
 
-    if item:
-        memory["recent_items"] = _append_unique(
-            memory["recent_items"], str(item).strip()
-        )
+        if item:
+            memory["recent_items"] = _append_unique(
+                memory["recent_items"], str(item).strip()
+            )
 
-    _write_file(memory)
-    logger.info("Memory updated: customer=%s item=%s", customer, item)
+        _write_file(memory)
+        logger.info("Memory updated: customer=%s item=%s", customer, item)

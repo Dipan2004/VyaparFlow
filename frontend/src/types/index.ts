@@ -2,7 +2,7 @@ export type EntryType = 'PROCESS' | 'DONE' | 'FAIL' | 'RETRY' | 'WAIT'
 export type Source = 'demo' | 'whatsapp'
 export type BackendSource = 'whatsapp' | 'payment' | 'marketplace'
 export type AgentStatus = 'idle' | 'pending' | 'running' | 'done' | 'failed'
-export type SimState = 'idle' | 'simulating' | 'complete' | 'error'
+export type SimState = 'idle' | 'processing' | 'complete' | 'error'
 
 export interface ActivityEntry {
   id: string
@@ -15,16 +15,19 @@ export interface ActivityEntry {
 
 export interface ChatMessage {
   id: string
-  text: string
+  text?: string
   sender: 'user' | 'bot'
   status?: 'sent' | 'delivered' | 'read'
   timestamp: Date
-  msgType?: 'USER INPUT' | 'SYSTEM RESPONSE' | 'INVOICE' | 'PAYMENT LOG'
+  msgType?: 'USER INPUT' | 'SYSTEM RESPONSE' | 'INVOICE' | 'PAYMENT REQUEST' | 'PAYMENT LOG'
+  invoice?: Invoice | null
+  payment?: PaymentSummary | null
+  eventType?: BackendEventType
 }
 
 export interface PhoneNotification {
   id: string
-  type?: 'whatsapp' | 'system'
+  type?: 'whatsapp' | 'system' | 'invoice' | 'payment' | 'alert'
   title: string
   message: string
   timestamp: number
@@ -42,6 +45,7 @@ export interface BackendLog {
 export type BackendEventType =
   | 'log'
   | 'pipeline_step'
+  | 'pipeline_status'
   | 'message_received'
   | 'intent_detected'
   | 'extraction_done'
@@ -54,6 +58,7 @@ export type BackendEventType =
   | 'error_occurred'
   | 'recovery_triggered'
   | 'recovery_success'
+  | 'notification'
 
 export interface BackendEvent {
   id: string

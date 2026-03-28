@@ -29,7 +29,7 @@ Extract:
 Extract:
 - customer (string | null): Name of the person who sent/received money
 - amount (number | null): The monetary amount (digits only, no currency symbol)
-- payment_type (string | null): Mode of payment if mentioned — "cash", "upi", "online", "cheque", or null
+- payment_type (string | null): Mode of payment if mentioned - "cash", "upi", "online", "cheque", or null
 
 ### credit
 Extract:
@@ -42,7 +42,7 @@ Extract:
 Extract:
 - customer (string | null): Name of the person returning the item, if mentioned
 - item (string | null): Product being returned or exchanged, if mentioned
-- reason (string | null): Reason for return — e.g. "size issue", "damaged", "wrong item"
+- reason (string | null): Reason for return - e.g. "size issue", "damaged", "wrong item"
 
 ### preparation
 Extract:
@@ -57,9 +57,9 @@ Extract:
 
 ## Hinglish Business Vocabulary Reference
 
-- "bhej dena" = send/deliver → order
-- "bheja" = sent (money) → payment
-- "ne bheja" = "[person] sent" → customer sent payment
+- "bhej dena" = send/deliver -> order
+- "bheja" = sent (money) -> payment
+- "ne bheja" = "[person] sent" -> customer sent payment
 - "exchange karna" / "wapas karna" / "return karna" = return/exchange
 - "udhar" / "udhaar" = on credit
 - "ready rakhna" / "pack karna" = prepare/pack
@@ -79,11 +79,15 @@ Extract:
 1. Always return a JSON object. Never return plain text.
 2. If a field is not present in the message, set it to null.
 3. Never guess or hallucinate values not present in the message.
-4. Normalize names to Title Case (e.g., "rahul" → "Rahul").
-5. Normalize items to simple English nouns (e.g., "kurti" → "kurti", "maal" → "goods").
+4. Normalize names to Title Case (e.g., "rahul" -> "Rahul").
+5. Normalize items to simple English nouns (e.g., "kurti" -> "kurti", "maal" -> "goods").
 6. Extract numbers as integers or floats, not strings.
 7. Do not include any field not listed for the given intent.
-8. For multi-intent: use a keyed object — each key is the intent name.
+8. For multi-intent: use a keyed object - each key is the intent name.
+9. If a number appears directly with an item in an order / credit / preparation phrase, treat that number as quantity.
+10. If a number appears with payment cues like "bheja", "paid", "diya", "transfer", or "clear", treat that number as amount.
+11. If an item is present for order / credit / preparation, never return quantity as null. Use the detected quantity or fallback to 1.
+12. In ambiguous order-like phrases, prefer quantity over null.
 
 ---
 
@@ -96,6 +100,10 @@ Output: {"customer": "Rahul", "amount": 15000, "payment_type": null}
 Intent: order
 Message: "bhaiya 3 kurti bhej dena"
 Output: {"customer": null, "item": "kurti", "quantity": 3}
+
+Intent: order
+Message: "3000 kurti bhej dena"
+Output: {"customer": null, "item": "kurti", "quantity": 3000}
 
 Intent: return
 Message: "size chota hai exchange karna hai"

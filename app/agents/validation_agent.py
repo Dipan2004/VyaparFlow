@@ -1,10 +1,11 @@
 """
 app/agents/validation_agent.py
 ------------------------------
-ValidationAgent — Stage 3 of the NotiFlow pipeline.
+ValidationAgent - Stage 3 of the NotiFlow pipeline.
 
 Wraps validators/data_validator.py into the BaseAgent interface.
-Normalises numbers, text, and payment aliases in context["data"].
+Normalises numbers, text, and payment aliases in context["data"] and
+context["multi_data"] so multi-intent routing receives validated payloads.
 """
 
 from __future__ import annotations
@@ -21,33 +22,33 @@ logger = logging.getLogger(__name__)
 class ValidationAgent(BaseAgent):
     """Normalise and validate extracted business data."""
 
-    name        = "ValidationAgent"
-    input_keys  = ["intent", "data"]
-    output_keys = ["data", "state"]
-    action      = "Normalise numbers, text, and payment aliases"
+    name = "ValidationAgent"
+    input_keys = ["intent", "intents", "data", "multi_data"]
+    output_keys = ["data", "multi_data", "state"]
+    action = "Normalise numbers, text, and payment aliases"
 
     def execute(self, context: dict[str, Any]) -> dict[str, Any]:
-        """
-        Validate context["data"] in-place and transition state to "validated".
-
-        Reads context["intent"] and context["data"].
-        Writes cleaned data back to context["data"].
-        """
         intent = context.get("intent", "other")
-        raw    = context.get("data", {})
+        intents = context.get("intents") or [intent]
+        raw = context.get("data", {})
+        multi_raw = context.get("multi_data", {}) or {}
 
         try:
-            # Import path works regardless of old vs new layout
-            try:
-                from app.validators.data_validator import validate_data
-            except ImportError:
-                from app.validators.data_validator import validate_data
+            from app.validators.data_validator import validate_data
 
-            validated = validate_data(intent, raw)
+            validated_multi = {
+                intent_name: validate_data(
+                    intent_name,
+                    multi_raw.get(intent_name, raw if intent_name == intent else {}),
+                )
+                for intent_name in intents
+            }
+            validated = validated_multi.get(intent, validate_data(intent, raw))
         except Exception as exc:
-            logger.warning("[ValidationAgent] validation error (%s) — using raw data", exc)
+            logger.warning("[ValidationAgent] validation error (%s) - using raw data", exc)
+            validated_multi = multi_raw or {intent: raw}
             validated = raw
 
-        update_context(context, data=validated, state="validated")
+        update_context(context, data=validated, multi_data=validated_multi, state="validated")
         logger.info("[ValidationAgent] validated data for intent '%s'", intent)
         return context

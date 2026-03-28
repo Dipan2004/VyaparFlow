@@ -6,6 +6,9 @@ import { Signal, Wifi, Battery } from 'lucide-react'
 export function PhoneScreen() {
   const { phoneNotifications } = useSimulationStore()
   const timeStr = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+  
+  // Show max 5 newest notifications (already ordered with newest first)
+  const visibleNotifications = phoneNotifications.slice(0, 5)
 
   return (
     <div className="flex h-full w-full items-center justify-center p-4 lg:p-8">
@@ -21,9 +24,9 @@ export function PhoneScreen() {
           </div>
         </div>
 
-        <div className="relative z-10 flex w-full flex-1 flex-col gap-2 px-4 pt-2">
+        <div className="relative z-10 flex w-full flex-1 flex-col gap-2 px-4 pt-2 overflow-y-auto">
           <AnimatePresence>
-            {phoneNotifications.map((notif) => (
+            {visibleNotifications.map((notif) => (
               <NotificationOverlay key={notif.id} notification={notif} />
             ))}
           </AnimatePresence>

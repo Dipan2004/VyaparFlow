@@ -43,7 +43,7 @@ from typing import Any
 
 from app.config                import DEMO_MODE
 from app.core.context          import create_context, update_context, log_step, add_error
-from app.core.event_bus        import emit_event, push_live_log
+from app.core.event_bus        import emit_event, emit_notification, push_live_log
 from app.core.planner          import build_plan
 from app.core.autonomy_planner import build_autonomy_plan
 from app.core.priority         import reset_priority_score
@@ -74,7 +74,27 @@ _DEMO_RESPONSES: dict[str, dict] = {
         "data": {"customer": None, "item": "goods", "quantity": 1},
         "event": {"event": "order_received", "order": {"status": "pending"}},
     },
+    "order": {
+        "intent": "order",
+        "data": {"customer": None, "item": "goods", "quantity": 1},
+        "event": {"event": "order_received", "order": {"status": "pending"}},
+    },
+    "bhej": {
+        "intent": "order",
+        "data": {"customer": None, "item": "goods", "quantity": 1},
+        "event": {"event": "order_received", "order": {"status": "pending"}},
+    },
+    "bheja": {
+        "intent": "order",
+        "data": {"customer": None, "item": "goods", "quantity": 1},
+        "event": {"event": "order_received", "order": {"status": "pending"}},
+    },
     "payment": {
+        "intent": "payment",
+        "data": {"customer": None, "amount": 0, "payment_type": None},
+        "event": {"event": "payment_recorded", "payment": {"status": "received"}},
+    },
+    "kiya": {
         "intent": "payment",
         "data": {"customer": None, "amount": 0, "payment_type": None},
         "event": {"event": "payment_recorded", "payment": {"status": "received"}},
@@ -131,7 +151,11 @@ def process_message_demo(message: str, source: str = "system") -> dict[str, Any]
 
 
 
-def process_message(message: str, source: str = "system") -> dict[str, Any]:
+def process_message(
+    message: str,
+    source: str = "system",
+    step_callback=None,
+) -> dict[str, Any]:
     """
     Run a raw business message through the full NotiFlow agent pipeline.
 
@@ -140,8 +164,13 @@ def process_message(message: str, source: str = "system") -> dict[str, Any]:
     Fix:     feedback loop — replan up to _MAX_REPLANS times if needed.
 
     Args:
-        message: Raw Hinglish or English business message.
-        source:  Notification source (e.g. "whatsapp", "gpay").
+        message:       Raw Hinglish or English business message.
+        source:        Notification source (e.g. "whatsapp", "gpay").
+        step_callback: Optional callable(payload: dict) invoked after each
+                       pipeline step completes.  Used by the API layer to
+                       stream incremental updates to connected clients.
+                       Must be thread-safe — it is called from the executor
+                       thread.  Failures are silently ignored.
 
     Returns:
         Flat result dict + full context.
@@ -152,7 +181,14 @@ def process_message(message: str, source: str = "system") -> dict[str, Any]:
     if not message or not message.strip():
         raise ValueError("Message cannot be empty.")
 
+    # ALWAYS run through orchestrator - no bypass allowed
     ctx = create_context(message.strip(), source=source)
+
+    # Store the step callback so _emit_pipeline_step_event can invoke it.
+    # The key is prefixed with "_" to mark it as internal/non-serialisable.
+    if step_callback is not None:
+        ctx["_step_callback"] = step_callback
+
     logger.info("Orchestrator ← %r (source=%s)", message, source)
     _emit_pipeline_event(
         ctx,
@@ -168,11 +204,30 @@ def process_message(message: str, source: str = "system") -> dict[str, Any]:
         log_text=f"[Orchestrator] Message received from {source}: {ctx['message']}",
     )
 
+    # STEP 0: Emit intent started immediately - real-time feedback
+    _emit_pipeline_step_event(ctx, "intent", "started", "Intent detection started")
+
+    # ── Emit pipeline started event ───────────────────────────────────────
+    emit_event(
+        ctx,
+        "pipeline_status",
+        {
+            "status": "started",
+            "message": message,
+            "source": source,
+        },
+        agent="Orchestrator",
+        step="pipeline",
+        message="Pipeline execution started",
+    )
+
     # ── Main plan + autonomy + feedback loop ──────────────────────────────
     while True:
         retry_count = ctx["metadata"].get("retry_count", 0)
 
         # ── 1. Build and run main plan ────────────────────────────────────
+        # IMPORTANT: Always build the plan AFTER intent is known
+        # First pass: intent might be None, so we need to rebuild after running intent agent
         plan = build_plan(ctx)
         logger.info(
             "[cycle=%d] Main plan: [%s]",
@@ -226,8 +281,13 @@ def process_message(message: str, source: str = "system") -> dict[str, Any]:
         for key in ("verification", "monitor", "risk", "alerts", "recovery"):
             ctx.pop(key, None)
 
-        # Clear accumulated errors from previous cycle (keep original errors)
-        ctx["errors"] = [e for e in ctx["errors"] if not e.startswith("[Monitor]")]
+        # Clear accumulated errors from previous cycle — keep only original
+        # meaningful errors, drop infrastructure noise and monitor alerts
+        ctx["errors"] = [
+            e for e in ctx["errors"]
+            if not e.startswith("[Monitor]")
+            and "LedgerAgent" not in e
+        ]
 
     # ── Mark final state ──────────────────────────────────────────────────
     if ctx.get("state") not in ("failed",):
@@ -241,6 +301,22 @@ def process_message(message: str, source: str = "system") -> dict[str, Any]:
         ctx.get("risk", {}).get("level", "n/a"),
         ctx.get("priority", "n/a"),
         ctx.get("priority_score", 0),
+    )
+
+    # ── Emit pipeline completed event ─────────────────────────────────────
+    emit_event(
+        ctx,
+        "pipeline_status",
+        {
+            "status": "completed",
+            "state": ctx.get("state"),
+            "intents": ctx.get("intents", [ctx.get("intent")]),
+            "priority": ctx.get("priority", "n/a"),
+            "risk_level": ctx.get("risk", {}).get("level", "n/a"),
+        },
+        agent="Orchestrator",
+        step="pipeline",
+        message="Pipeline execution completed",
     )
 
     return _build_result(ctx)
@@ -389,10 +465,13 @@ def _should_replan(ctx: dict[str, Any]) -> bool:
         logger.info("[Feedback] replan trigger: risk=high")
         return True
 
-    # Only count errors that are not pure autonomy-internal noise
+    # Only count errors that are not pure autonomy-internal noise or
+    # non-critical infrastructure failures (Sheets, Excel sync, etc.)
+    _INFRA_PREFIXES = ("[Autonomy]", "LedgerAgent:", "LedgerAgent ")
     meaningful_errors = [
         e for e in ctx.get("errors", [])
-        if not e.startswith("[Autonomy]")
+        if not any(e.startswith(prefix) or prefix.rstrip() in e
+                   for prefix in _INFRA_PREFIXES)
     ]
     if meaningful_errors:
         logger.info(
@@ -405,6 +484,10 @@ def _should_replan(ctx: dict[str, Any]) -> bool:
 
 def _build_result(ctx: dict[str, Any]) -> dict[str, Any]:
     """Flatten context into the public API response shape."""
+    # Remove internal keys that are not serialisable and must not leak
+    # into the API response or the context dict returned to callers.
+    ctx.pop("_step_callback", None)
+
     event = ctx.get("event", {}) or {}
     data = ctx.get("data", {}) or {}
     event_order = event.get("order", {}) if isinstance(event.get("order"), dict) else {}
@@ -467,8 +550,69 @@ def _build_result(ctx: dict[str, Any]) -> dict[str, Any]:
 
 
 def _emit_step_success(ctx: dict[str, Any], agent_key: str) -> None:
-    if agent_key in {"invoice_agent", "payment_agent"}:
+    # ─── Emit phone notifications for business-relevant agents ─────────
+    if agent_key == "invoice_agent":
+        event_type = "invoice_generated"
+        agent_name = "InvoiceAgent"
+        payload = _build_step_payload(ctx, agent_key)
+        message, log_text = _build_step_messages(ctx, agent_key, agent_name)
+        _emit_pipeline_event(
+            ctx,
+            event_type,
+            payload,
+            agent=agent_name,
+            step=agent_key,
+            message=message,
+            log_text=log_text,
+        )
+        
+        # Emit notification
+        invoice = payload.get("invoice") or {}
+        invoice_id = invoice.get("invoice_id") or "N/A"
+        total = invoice.get("total") or invoice.get("total_amount") or 0
+        emit_notification(
+            ctx,
+            category="invoice",
+            title="🧾 Invoice Created",
+            message=f"{invoice_id} • ₹{total:,}",
+            priority="normal",
+            invoice_id=invoice_id,
+            amount=total,
+        )
         return
+    
+    if agent_key == "payment_agent":
+        event_type = "payment_requested"
+        agent_name = "PaymentAgent"
+        payload = _build_step_payload(ctx, agent_key)
+        message, log_text = _build_step_messages(ctx, agent_key, agent_name)
+        _emit_pipeline_event(
+            ctx,
+            event_type,
+            payload,
+            agent=agent_name,
+            step=agent_key,
+            message=message,
+            log_text=log_text,
+        )
+        
+        # Emit notification
+        payment = payload.get("payment") or {}
+        invoice = payload.get("invoice") or {}
+        invoice_id = payment.get("invoice_id") or invoice.get("invoice_id") or "N/A"
+        amount = payment.get("amount") or invoice.get("total") or invoice.get("total_amount") or 0
+        emit_notification(
+            ctx,
+            category="payment",
+            title="💳 Payment Requested",
+            message=f"{invoice_id} • ₹{amount:,}",
+            priority="normal",
+            invoice_id=invoice_id,
+            amount=amount,
+        )
+        return
+    
+    # ─── Other agents ──────────────────────────────────────────────────
     event_type, agent_name = _STEP_EVENT_MAP.get(agent_key, ("execution_done", agent_key))
     payload = _build_step_payload(ctx, agent_key)
     message, log_text = _build_step_messages(ctx, agent_key, agent_name)
@@ -620,7 +764,33 @@ def _emit_pipeline_step_event(
     detail: str = "",
 ) -> None:
     step_message = f"{step} {status}"
+    log_entry = push_live_log(
+        ctx,
+        {
+            "agent": "Orchestrator",
+            "status": "error" if status == "failed" else "info",
+            "action": step_message,
+            "detail": detail or f"[Orchestrator] Step {step} {status}",
+        },
+    )
+
+    # Emit log event immediately - real-time feedback
     emit_event(
+        ctx,
+        "log",
+        {
+            "step": step,
+            "status": status,
+            "message": detail or step_message,
+        },
+        agent="Orchestrator",
+        step=step,
+        message=detail or step_message,
+        log_entry=log_entry,
+    )
+
+    # Emit pipeline step event immediately - real-time feedback
+    event = emit_event(
         ctx,
         "pipeline_step",
         {
@@ -631,4 +801,17 @@ def _emit_pipeline_step_event(
         agent="Orchestrator",
         step=step,
         message=step_message,
+        log_entry=log_entry,
     )
+
+    # Per-step streaming hook — the API layer injects a callback via
+    # ctx["_step_callback"](payload) that is thread-safe and non-blocking.
+    # When running outside an HTTP request (CLI, tests) this key is absent
+    # and we skip silently.
+    cb = ctx.get("_step_callback")
+    if cb is not None:
+        try:
+            cb({"type": "pipeline_step", "step": step, "status": status,
+                "detail": detail, "event": event})
+        except Exception:
+            pass  # never let streaming errors affect the pipeline

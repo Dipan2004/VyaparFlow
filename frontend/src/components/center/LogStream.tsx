@@ -50,7 +50,7 @@ export function LogStream() {
         
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1 uppercase tracking-widest text-text-muted">
-             <Activity size={8} className={state === 'simulating' ? 'animate-pulse text-blue-400' : 'opacity-30'} />
+             <Activity size={8} className={state === 'processing' ? 'animate-pulse text-blue-400' : 'opacity-30'} />
              <span>{activityLog.length}</span>
           </div>
         </div>

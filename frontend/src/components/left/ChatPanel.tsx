@@ -25,7 +25,7 @@ export function ChatPanel() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!input.trim() || state === 'simulating') return
+    if (!input.trim() || isBotTyping || state === 'processing') return
     void sendChatMessage(input)
     setInput('')
   }
@@ -45,7 +45,7 @@ export function ChatPanel() {
             </span>
           )}
         </h3>
-        {state === 'simulating' && (
+        {state === 'processing' && (
           <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-sm border border-blue-500/30 bg-blue-500/10">
              <span className="w-1 h-1 rounded-full bg-blue-400 animate-pulse"></span>
              <span className="text-[8px] font-bold uppercase tracking-widest text-blue-400">Processing</span>
@@ -78,7 +78,7 @@ export function ChatPanel() {
                   ? 'bg-blue-600/20 text-blue-100 border-blue-500/20' 
                   : isWhatsApp ? 'bg-[#202c33] text-gray-100' : 'bg-surface text-text'
               )}>
-                {msg.text}
+                {msg.text || (msg.msgType === 'INVOICE' ? 'Invoice generated.' : 'Backend update received.')}
               </div>
               <span className="text-[9px] text-text-muted/40 font-mono px-1">
                 {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -110,13 +110,12 @@ export function ChatPanel() {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            disabled={state === 'simulating'}
             placeholder={isWhatsApp ? "Send business command..." : "Type a message..."}
-            className="flex-1 rounded-sm border border-divider/40 bg-black/40 px-3 py-2 text-xs font-medium text-text transition-all placeholder:text-text-muted/40 focus:border-white/20 focus:outline-none disabled:opacity-50"
+            className="flex-1 rounded-sm border border-divider/40 bg-black/40 px-3 py-2 text-xs font-medium text-text transition-all placeholder:text-text-muted/40 focus:border-white/20 focus:outline-none"
           />
           <button
             type="submit"
-            disabled={!input.trim() || state === 'simulating'}
+            disabled={!input.trim() || isBotTyping || state === 'processing'}
             className="flex items-center justify-center rounded-sm bg-[#00a884] px-4 py-2 text-white transition-colors hover:bg-[#008f6f] disabled:opacity-40 shadow-sm"
           >
             <Send size={14} />

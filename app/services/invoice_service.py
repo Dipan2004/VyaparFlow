@@ -15,12 +15,21 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_CATALOG_PRICES: dict[str, float] = {
-    "sugar": 50.0,
-    "atta": 50.0,
-    "rice": 60.0,
-    "kurti": 50.0,
+PRICE_MAP: dict[str, float] = {
+    "kurta": 50.0,
+    "kurti": 80.0,
+    "chini": 50.0,
+    "atta": 40.0,
 }
+
+# Public catalog kept for backward compatibility with existing imports.
+CATALOG_PRICES: dict[str, float] = {
+    **PRICE_MAP,
+    "sugar": 50.0,
+    "rice": 60.0,
+    "chawal": 60.0,
+}
+_CATALOG_PRICES = CATALOG_PRICES
 
 
 def _now_iso() -> str:
@@ -47,8 +56,11 @@ class InvoiceBuilder:
         order_id: Optional[str] = None,
     ) -> dict:
         invoice_id = _make_invoice_id()
-        normalized_item = (item or "").strip() or None
-        qty = quantity or 0
+        normalized_item = (item or "").strip().lower() or None
+        qty = 1 if quantity is None else float(quantity)
+        if qty.is_integer():
+            qty = int(qty)
+
         unit_price = self._resolve_price(normalized_item, price)
         total_amount = round(float(qty) * unit_price, 2)
 
@@ -60,7 +72,7 @@ class InvoiceBuilder:
             "customer": customer,
             "items": [{"name": normalized_item, "qty": qty, "price": unit_price}],
             "item": normalized_item,
-            "quantity": quantity,
+            "quantity": qty,
             "unit_price": unit_price,
             "total": total_amount,
             "total_amount": total_amount,
@@ -69,7 +81,7 @@ class InvoiceBuilder:
 
         logger.info(
             "Invoice generated: %s | customer=%s item=%s qty=%s total=%.2f",
-            invoice_id, customer, normalized_item, quantity, total_amount,
+            invoice_id, customer, normalized_item, qty, total_amount,
         )
         return invoice
 
@@ -77,15 +89,15 @@ class InvoiceBuilder:
         if override_price is not None:
             return float(override_price)
         if not item:
-            return 50.0
-        return float(self.catalog_prices.get(item.lower(), 50.0))
+            return float(PRICE_MAP["kurta"])
+        return float(self.catalog_prices.get(item.lower(), PRICE_MAP.get(item.lower(), 50.0)))
 
 
 def generate_invoice(
     customer: Optional[str],
     item: Optional[str],
     quantity: Optional[int | float],
-    unit_price: float = 50.0,
+    unit_price: float | None = None,
     order_id: Optional[str] = None,
 ) -> dict:
     builder = InvoiceBuilder()

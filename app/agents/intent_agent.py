@@ -64,8 +64,12 @@ class IntentAgent(BaseAgent):
                 context=context,
             )
         except Exception as exc:
-            logger.error("[IntentAgent] all LLM backends failed - defaulting to 'other': %s", exc)
-            raw = '{"intent": "other"}'
+            logger.error("[IntentAgent] all LLM backends failed - using heuristic fallback: %s", exc)
+            # Heuristic fallback: detect intent from message keywords
+            intents = self._heuristic_intent(message)
+            update_context(context, intent=intents[0], intents=intents, state="intent_detected")
+            logger.info("[IntentAgent] heuristic intents=%s (primary=%s)", intents, intents[0])
+            return context
         intents = self._parse(raw)
         primary = intents[0]
 
@@ -134,3 +138,37 @@ class IntentAgent(BaseAgent):
             valid = ["other"]
 
         return valid
+
+    @staticmethod
+    def _heuristic_intent(message: str) -> list[str]:
+        """
+        Heuristic fallback: detect intent from message keywords when LLM fails.
+        """
+        msg = message.lower()
+        intents = []
+
+        # Order keywords - check FIRST to prioritize (more specific)
+        if any(kw in msg for kw in ['bhej dena', 'bhejna', 'chahiye', 'want', 'dena', 'karna', '3 kurti', '2 shirt', '4 pant']):
+            intents.append('order')
+
+        # Payment keywords
+        if any(kw in msg for kw in ['payment', 'paid', 'bheja', 'transfer', 'upi', 'gpay', 'pay', 'kiya']):
+            intents.append('payment')
+
+        # Return keywords
+        if any(kw in msg for kw in ['return', 'wapas', 'revert', 'cancel', 'refund']):
+            intents.append('return')
+
+        # Credit keywords
+        if any(kw in msg for kw in ['credit', 'liye', 'len', 'due', 'baaki']):
+            intents.append('credit')
+
+        # Preparation keywords
+        if any(kw in msg for kw in ['prepare', 'ready', 'pack', 'taiyar']):
+            intents.append('preparation')
+
+        # Preparation keywords
+        if any(kw in msg for kw in ['prepare', 'ready', 'pack', 'taiyar']):
+            intents.append('preparation')
+
+        return intents if intents else ['other']

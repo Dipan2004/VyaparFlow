@@ -15,12 +15,19 @@ Row structure:
 
 If the Sheets API is unreachable or misconfigured, the service logs
 the error and returns False — it NEVER crashes the pipeline.
+
+Reconnection policy
+-------------------
+A failed connection attempt is retried after RETRY_INTERVAL_SECONDS (300s)
+so that a process started before credentials are in place can recover
+without a restart.  A successful connection is cached indefinitely.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -31,30 +38,46 @@ logger = logging.getLogger(__name__)
 # Lazy-loaded module-level client
 # ---------------------------------------------------------------------------
 
-_sheet = None          # gspread.Worksheet (first sheet)
-_initialised = False   # True after first attempt
+_sheet = None            # gspread.Worksheet (first sheet) — set on success
+_last_attempt: float = 0.0   # monotonic timestamp of the last connection attempt
+_connected: bool = False     # True once a worksheet was obtained successfully
+
+# Re-attempt a failed connection after this many seconds.
+_RETRY_INTERVAL_SECONDS: float = float(
+    os.getenv("SHEETS_RETRY_INTERVAL_SECONDS", "300")
+)
 
 
 def _get_sheet():
     """
-    Lazy-initialise the gspread worksheet.
+    Lazy-initialise the gspread worksheet with time-based retry on failure.
 
-    Returns the worksheet on success, or None if credentials / sheet ID
-    are missing or invalid.
+    Returns the worksheet on success, or None when unavailable.  A failed
+    attempt is retried after _RETRY_INTERVAL_SECONDS so the process can
+    recover if credentials appear after startup.
     """
-    global _sheet, _initialised
+    global _sheet, _last_attempt, _connected
 
-    if _initialised:
+    # Already connected — return the cached worksheet immediately.
+    if _connected and _sheet is not None:
         return _sheet
 
-    _initialised = True
+    # Not yet connected: respect the retry interval to avoid hammering the
+    # filesystem / network on every incoming notification.
+    now = time.monotonic()
+    if _last_attempt > 0 and (now - _last_attempt) < _RETRY_INTERVAL_SECONDS:
+        return None
+
+    _last_attempt = now
 
     try:
         import gspread
         from google.oauth2.service_account import Credentials
     except ImportError as exc:
-        logger.warning("Google Sheets libraries not installed (%s). "
-                       "Install gspread and google-auth.", exc)
+        logger.warning(
+            "Google Sheets libraries not installed (%s). "
+            "Install gspread and google-auth.", exc
+        )
         return None
 
     creds_path = os.getenv("GOOGLE_SHEETS_CREDENTIALS", "credentials/sheets.json")
@@ -84,6 +107,7 @@ def _get_sheet():
         client = gspread.authorize(credentials)
         spreadsheet = client.open_by_key(sheet_id)
         _sheet = spreadsheet.sheet1          # first worksheet
+        _connected = True
         logger.info("Google Sheets connected: %s", spreadsheet.title)
         return _sheet
     except Exception as exc:
@@ -137,4 +161,8 @@ def append_transaction(
         return True
     except Exception as exc:
         logger.error("Google Sheets update failed: %s", exc)
+        # Reset connection state so the next call re-attempts after the
+        # retry interval rather than reusing a broken worksheet handle.
+        _connected = False
+        _sheet = None
         return False

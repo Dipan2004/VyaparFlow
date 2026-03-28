@@ -1,0 +1,153 @@
+# =============================================================================
+# .dockerignore - Exclude unnecessary files from Docker context
+# =============================================================================
+
+# Python & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+ENV/
+venv/
+Denv/
+.venv
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Testing & Coverage
+.pytest_cache/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# IDE & Editor Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+.project
+.pydevproject
+.settings
+*.iml
+.vscode-container-dockerfile
+
+# Git
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# Node (Frontend build artifacts)
+node_modules/
+NPM_DEBUG.log
+npm-debug.log
+yarn-error.log
+.npm
+dist/
+build/
+
+# TypeScript
+*.tsbuildinfo
+tsconfig.tsbuild.json
+ts_errors*.txt
+
+# Temporary & Log Files
+*.log
+*.pot
+*.mo
+.env
+.env.local
+.env.*
+temp/
+tmp/
+*.tmp
+*.swp
+logs/
+
+# Database & Data Files (unless needed at runtime)
+*.db
+*.sqlite
+*.sqlite3
+notiflow_data.xlsx
+agent_memory.json
+
+# Documentation
+CLAUDE.md
+TODO.md
+README.md  # Include only if needed
+docs/
+mkdocs.yml
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+Jenkinsfile
+azure-pipelines.yml
+
+# Docker Files (don't need these in image)
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.*.yml
+
+# Package Manager Locks (handled by requirements.txt)
+package-lock.json
+yarn.lock
+poetry.lock
+Pipfile.lock
+
+# OS Files
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Development Files
+test_*.py
+demo/
+examples/
+scripts/
+*.ipynb
+.ipynb_checkpoints/
+
+# Credentials (IMPORTANT - never include in image)
+credentials/
+*.json
+*.key
+*.pem
+*.pfx
+.credentials
+
+# Large Files
+*.zip
+*.tar.gz
+*.tar
+*.rar
+*.7z

@@ -1,0 +1,108 @@
+version: "3.8"
+
+services:
+  vyaparflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vyaparflow-hf
+    ports:
+      - "7860:7860"
+    environment:
+      # ─────────────────────────────────────────────────────────────
+      # Application Settings
+      # ─────────────────────────────────────────────────────────────
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      PORT: "7860"
+      
+      # ─────────────────────────────────────────────────────────────
+      # Demo Mode (change to false for live LLM)
+      # ─────────────────────────────────────────────────────────────
+      NOTIFLOW_DEMO_MODE: "true"
+      
+      # ─────────────────────────────────────────────────────────────
+      # NVIDIA NIM Configuration
+      # ─────────────────────────────────────────────────────────────
+      NVIDIA_NIM_API_KEY: "${NVIDIA_NIM_API_KEY:-your_api_key_here}"
+      NVIDIA_NIM_BASE_URL: "https://integrate.api.nvidia.com/v1"
+      NVIDIA_NIM_MODEL: "deepseek-ai/deepseek-v3.2"
+      NIM_PRIMARY_MODEL: "deepseek-ai/deepseek-v3.2"
+      NIM_FALLBACK_MODEL: "deepseek-ai/deepseek-v3.1"
+      
+      # ─────────────────────────────────────────────────────────────
+      # Google Gemini (optional fallback)
+      # ─────────────────────────────────────────────────────────────
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      
+      # ─────────────────────────────────────────────────────────────
+      # OpenRouter (optional secondary fallback)
+      # ─────────────────────────────────────────────────────────────
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      OPENROUTER_MODEL: "deepseek/deepseek-chat"
+      OPENROUTER_REFERER: "http://localhost:7860"
+      OPENROUTER_TITLE: "VyaparFlow-Docker"
+      
+      # ─────────────────────────────────────────────────────────────
+      # Google Sheets (optional)
+      # ─────────────────────────────────────────────────────────────
+      GOOGLE_SHEETS_CREDENTIALS: "credentials/sheets.json"
+      GOOGLE_SHEET_ID: "${GOOGLE_SHEET_ID:-}"
+      
+      # ─────────────────────────────────────────────────────────────
+      # Logging
+      # ─────────────────────────────────────────────────────────────
+      LOG_LEVEL: "INFO"
+    
+    volumes:
+      # Mount local data directory for persistence
+      - ./data:/app/data
+      # Optionally mount credentials (if available)
+      - ./credentials:/app/credentials:ro
+    
+    # Health check for container orchestration
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    # Resource limits (adjust based on your system)
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+        reservations:
+          cpus: "1"
+          memory: 1G
+    
+    restart: unless-stopped
+
+# ═════════════════════════════════════════════════════════════════════════
+# USAGE:
+# ═════════════════════════════════════════════════════════════════════════
+# 
+# Build image:
+#   docker-compose build
+# 
+# Start service:
+#   docker-compose up -d
+# 
+# View logs:
+#   docker-compose logs -f vyaparflow
+# 
+# Test API:
+#   curl http://localhost:7860/health
+#   curl -X POST http://localhost:7860/process \
+#     -H "Content-Type: application/json" \
+#     -d '{"message": "rahul ne 15000 bheja"}'
+# 
+# Stop service:
+#   docker-compose down
+# 
+# Remove image:
+#   docker-compose down -v
+# 
+# ═════════════════════════════════════════════════════════════════════════

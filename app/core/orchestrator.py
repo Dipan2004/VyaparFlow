@@ -41,6 +41,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.config                import DEMO_MODE
 from app.core.context          import create_context, update_context, log_step, add_error
 from app.core.event_bus        import emit_event, push_live_log
 from app.core.planner          import build_plan
@@ -61,6 +62,73 @@ _STEP_EVENT_MAP: dict[str, tuple[str, str]] = {
     "ledger": ("execution_done", "LedgerAgent"),
     "recovery": ("recovery_triggered", "RecoveryAgent"),
 }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Demo Mode Support (for API when DEMO_MODE=true)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_DEMO_RESPONSES: dict[str, dict] = {
+    "new order": {
+        "intent": "order",
+        "data": {"customer": None, "item": "goods", "quantity": 1},
+        "event": {"event": "order_received", "order": {"status": "pending"}},
+    },
+    "payment": {
+        "intent": "payment",
+        "data": {"customer": None, "amount": 0, "payment_type": None},
+        "event": {"event": "payment_recorded", "payment": {"status": "received"}},
+    },
+    "return": {
+        "intent": "return",
+        "data": {"customer": None, "item": None, "reason": "other"},
+        "event": {"event": "return_requested", "return": {"status": "pending_review"}},
+    },
+    "credit": {
+        "intent": "credit",
+        "data": {"customer": None, "amount": None},
+        "event": {"event": "credit_recorded", "credit": {"status": "open"}},
+    },
+    "preparation": {
+        "intent": "preparation",
+        "data": {"item": "goods", "quantity": 1},
+        "event": {"event": "preparation_queued", "preparation": {"status": "queued"}},
+    },
+}
+
+
+def _demo_response(message: str) -> tuple[str, dict]:
+    """Get a demo response based on message keywords."""
+    m = message.lower()
+    for keyword, response in _DEMO_RESPONSES.items():
+        if keyword in m:
+            return response["intent"], response
+    return "other", {
+        "intent": "other",
+        "data": {},
+        "event": {"event": "message_processed", "status": "no_action"},
+    }
+
+
+def process_message_demo(message: str, source: str = "system") -> dict[str, Any]:
+    """
+    Demo mode: Return instant mock response without calling any LLM.
+    Useful for testing and when NVIDIA NIM API is slow or unavailable.
+    """
+    ctx = create_context(message.strip(), source=source)
+    intent, response_data = _demo_response(message)
+    
+    ctx["intent"] = intent
+    ctx["intents"] = [intent]
+    ctx["data"] = response_data.get("data", {})
+    ctx["event"] = response_data.get("event", {})
+    ctx["state"] = "execution_done"
+    ctx["demo_mode"] = True
+    
+    logger.info("[DEMO MODE] Intent=%s, Message=%r", intent, message)
+    
+    return _build_result(ctx)
+
 
 
 def process_message(message: str, source: str = "system") -> dict[str, Any]:

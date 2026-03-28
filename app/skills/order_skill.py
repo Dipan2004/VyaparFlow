@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+from app.core.event_bus             import emit_event, push_live_log, store_invoice
 from app.utils.excel_writer         import append_row, read_sheet
 from app.services.invoice_service   import generate_invoice
 from app.services.inventory_service import deduct_stock
@@ -39,7 +40,7 @@ def _generate_order_id() -> str:
     return f"ORD-{today}-{seq:04d}"
 
 
-def process_order(data: dict) -> dict:
+def process_order(data: dict, context: dict | None = None) -> dict:
     """
     Process an order event: persist order, update inventory, generate invoice,
     and update agent memory.
@@ -82,9 +83,42 @@ def process_order(data: dict) -> dict:
         item      = item,
         quantity  = quantity,
         order_id  = order_id,
-        unit_price = 0.0,
+        unit_price = 50.0,
     )
+    invoice = store_invoice(invoice)
     append_row("Invoices", invoice)
+    if context is not None:
+        context["invoice"] = invoice
+        invoice_log = push_live_log(context, {
+            "agent": "ExecutionAgent",
+            "status": "success",
+            "action": f"Invoice created: {invoice['invoice_id']}",
+            "detail": f"[ExecutionAgent] Invoice created: {invoice['invoice_id']}",
+        })
+        emit_event(
+            context,
+            "invoice_generated",
+            invoice,
+            agent="ExecutionAgent",
+            step="execution",
+            message=f"Invoice created: {invoice['invoice_id']}",
+            log_entry=invoice_log,
+        )
+        payment_log = push_live_log(context, {
+            "agent": "ExecutionAgent",
+            "status": "success",
+            "action": f"Payment requested for {invoice['invoice_id']}",
+            "detail": f"[ExecutionAgent] Payment requested: {invoice['invoice_id']}",
+        })
+        emit_event(
+            context,
+            "payment_requested",
+            invoice,
+            agent="ExecutionAgent",
+            step="payment",
+            message=f"Payment requested for {invoice['invoice_id']}",
+            log_entry=payment_log,
+        )
 
     # 4 ── Memory update ──────────────────────────────────────────────────────
     update_memory(customer=customer, item=item)

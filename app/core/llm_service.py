@@ -47,11 +47,20 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-_NIM_API_KEY        = os.getenv("NVIDIA_NIM_API_KEY")
-_NIM_BASE_URL       = os.getenv("NVIDIA_NIM_BASE_URL", "https://integrate.api.nvidia.com/v1")
+_NIM_API_KEY        = os.getenv("NVIDIA_NIM_API_KEY") or os.getenv("NVIDIA_API_KEY")
+_NIM_BASE_URL       = (
+    os.getenv("NVIDIA_NIM_BASE_URL")
+    or os.getenv("NIM_BASE_URL")
+    or "https://integrate.api.nvidia.com/v1"
+)
 _OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 _OPENROUTER_BASE    = "https://openrouter.ai/api/v1"
-_LEGACY_NIM_MODEL   = os.getenv("NVIDIA_NIM_MODEL", "deepseek-ai/deepseek-v3")
+_LEGACY_NIM_MODEL   = os.getenv("NVIDIA_NIM_MODEL", "deepseek-ai/deepseek-v3.2")
+_REQUEST_TIMEOUT_S  = float(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
+_RETRY_COUNT        = int(os.getenv("LLM_RETRY_COUNT", "2"))
+_SIMULATE_NIM_FAILURE = os.getenv("SIMULATE_NIM_FAILURE", "false").lower() == "true"
+_SIMULATED_NIM_FAILURE_USED = False
+_SIMULATE_NIM_FAIL  = os.getenv("SIMULATE_NIM_FAILURE", "false").lower() == "true"
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +75,26 @@ class LLMService:
     optionally writes audit info to context.
     """
 
+    def call_llm(
+        self,
+        prompt: str,
+        agent_name: str,
+        *,
+        max_tokens: int = 256,
+        task_type: str = "",
+        context: Optional[dict[str, Any]] = None,
+        stream: bool = False,
+    ) -> str:
+        """Convenience wrapper for agent-aware LLM calls."""
+        return self.generate(
+            prompt,
+            max_tokens=max_tokens,
+            agent_name=agent_name,
+            task_type=task_type,
+            context=context,
+            stream=stream,
+        )
+
     def generate(
         self,
         prompt:     str,
@@ -74,6 +103,7 @@ class LLMService:
         agent_name: str = "",
         task_type:  str = "",
         context:    Optional[dict[str, Any]] = None,
+        stream:     bool = False,
     ) -> str:
         """
         Send a prompt to the best available model for this agent/task.
@@ -93,11 +123,20 @@ class LLMService:
             RuntimeError: If ALL models in the route fail.
         """
         from app.core.llm_router import route_llm
+        from app.core.event_bus import emit_event
 
         route      = route_llm(agent_name, task_type)
         primary    = route["primary"]
         fallbacks  = route["fallbacks"]
         all_models = [primary] + fallbacks
+        self._stream_requested = stream
+
+        if context is not None:
+            context.setdefault("metadata", {}).update({
+                "llm_timeout_seconds": _REQUEST_TIMEOUT_S,
+                "llm_retry_count": _RETRY_COUNT,
+                "llm_stream": stream,
+            })
 
         last_exc: Optional[Exception] = None
         tried: list[str] = []
@@ -106,6 +145,46 @@ class LLMService:
             provider   = model_entry["provider"]
             model_name = model_entry["model"]
             tokens     = model_entry.get("max_tokens") or max_tokens
+
+            # ── Error Simulation: NIM failure ─────────────────────────────
+            if _SIMULATE_NIM_FAIL and provider == "nim" and "v3.2" in model_name:
+                logger.warning(f"SIMULATION: Intentional NIM timeout for {model_name}")
+                exc = RuntimeError(f"NIM gateway timeout (simulated) for {model_name}")
+                tried.append(model_name)
+                last_exc = exc
+                next_model = all_models[idx + 1] if idx + 1 < len(all_models) else None
+                if context is not None:
+                    emit_event(
+                        context,
+                        "error_occurred",
+                        {
+                            "step": agent_name or "llm",
+                            "message": str(exc),
+                            "provider": provider,
+                            "model": model_name,
+                        },
+                        agent=agent_name or "LLMService",
+                        step="llm",
+                        message=str(exc),
+                        status="error",
+                    )
+                    if next_model is not None:
+                        emit_event(
+                            context,
+                            "recovery_triggered",
+                            {
+                                "step": agent_name or "llm",
+                                "failed_provider": provider,
+                                "failed_model": model_name,
+                                "fallback_provider": next_model.get("provider"),
+                                "fallback_model": next_model.get("model"),
+                            },
+                            agent=agent_name or "LLMService",
+                            step="llm",
+                            message=f"Fallback triggered → {next_model.get('provider')}/{next_model.get('model')}",
+                        )
+                self._log_fallback(agent_name, provider, model_name, exc, next_model)
+                continue
 
             try:
                 response = self._call_model(provider, model_name, prompt, tokens)
@@ -120,6 +199,20 @@ class LLMService:
                         "fallback_used":  idx > 0,
                         "models_tried":   tried + [model_name],
                     })
+                    if idx > 0:
+                        emit_event(
+                            context,
+                            "recovery_success",
+                            {
+                                "step": agent_name or "llm",
+                                "provider": provider,
+                                "model": model_name,
+                                "models_tried": tried + [model_name],
+                            },
+                            agent=agent_name or "LLMService",
+                            step="llm",
+                            message=f"Recovered with {provider}/{model_name}",
+                        )
 
                 level = "primary" if idx == 0 else f"fallback #{idx}"
                 logger.info(
@@ -131,13 +224,58 @@ class LLMService:
             except Exception as exc:
                 tried.append(model_name)
                 last_exc = exc
-                logger.warning(
-                    "LLMService: %s/%s failed (%s) — trying next",
-                    provider, model_name, exc
-                )
+                next_model = all_models[idx + 1] if idx + 1 < len(all_models) else None
+                if context is not None:
+                    emit_event(
+                        context,
+                        "error_occurred",
+                        {
+                            "step": agent_name or "llm",
+                            "message": str(exc),
+                            "provider": provider,
+                            "model": model_name,
+                        },
+                        agent=agent_name or "LLMService",
+                        step="llm",
+                        message=str(exc),
+                    )
+                    if next_model is not None:
+                        emit_event(
+                            context,
+                            "recovery_triggered",
+                            {
+                                "step": agent_name or "llm",
+                                "failed_provider": provider,
+                                "failed_model": model_name,
+                                "fallback_provider": next_model.get("provider"),
+                                "fallback_model": next_model.get("model"),
+                            },
+                            agent=agent_name or "LLMService",
+                            step="llm",
+                            message=f"Fallback to {next_model.get('provider')}/{next_model.get('model')}",
+                        )
+                self._log_fallback(agent_name, provider, model_name, exc, next_model)
                 continue
 
-        logger.error("LLMService: all %d model(s) failed. Last: %s", len(all_models), last_exc)
+        if not agent_name and not task_type:
+            try:
+                logger.warning("[LLMService] route exhausted - using legacy Gemini shim")
+                response = self._call_gemini(prompt)
+                if context is not None:
+                    context["model_used"] = "gemini-legacy"
+                    context["fallback_used"] = True
+                    context.setdefault("metadata", {}).update({
+                        "model_used": "gemini-legacy",
+                        "model_provider": "gemini",
+                        "fallback_used": True,
+                        "models_tried": tried + ["gemini-legacy"],
+                    })
+                return response
+            except Exception as gemini_exc:
+                last_exc = gemini_exc
+                tried.append("gemini-legacy")
+
+        logger.error("LLMService: all %d model(s) failed. Last: %s", len(tried), last_exc)
         raise RuntimeError(
             f"All LLM backends failed for agent='{agent_name}' task='{task_type}'. "
             f"Tried: {tried}. Last error: {last_exc}"
@@ -156,6 +294,10 @@ class LLMService:
     # ── NVIDIA NIM ────────────────────────────────────────────────────────────
 
     def _call_nim(self, model_name: str, prompt: str, max_tokens: int) -> str:
+        global _SIMULATED_NIM_FAILURE_USED
+        if _SIMULATE_NIM_FAILURE and not _SIMULATED_NIM_FAILURE_USED:
+            _SIMULATED_NIM_FAILURE_USED = True
+            raise TimeoutError("NIM timeout")
         if not _NIM_API_KEY:
             raise RuntimeError("NVIDIA_NIM_API_KEY is not set.")
         try:
@@ -163,14 +305,16 @@ class LLMService:
         except ImportError:
             raise RuntimeError("openai not installed. Run: pip install openai")
 
-        client = OpenAI(base_url=_NIM_BASE_URL, api_key=_NIM_API_KEY)
-        completion = client.chat.completions.create(
-            model=model_name,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            max_tokens=max_tokens,
+        client = OpenAI(
+            base_url=_NIM_BASE_URL,
+            api_key=_NIM_API_KEY,
+            timeout=_REQUEST_TIMEOUT_S,
+            max_retries=0,
         )
-        text = completion.choices[0].message.content or ""
+        text = self._request_with_retry(
+            provider_label=f"NIM[{model_name}]",
+            request_fn=lambda: self._create_chat_completion(client, model_name, prompt, max_tokens),
+        )
         logger.debug("NIM[%s] raw: %r", model_name, text[:200])
         return text.strip()
 
@@ -193,14 +337,13 @@ class LLMService:
             base_url=_OPENROUTER_BASE,
             api_key=_OPENROUTER_API_KEY,
             default_headers=extra_headers,
+            timeout=_REQUEST_TIMEOUT_S,
+            max_retries=0,
         )
-        completion = client.chat.completions.create(
-            model=model_name,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            max_tokens=max_tokens,
+        text = self._request_with_retry(
+            provider_label=f"OpenRouter[{model_name}]",
+            request_fn=lambda: self._create_chat_completion(client, model_name, prompt, max_tokens),
         )
-        text = completion.choices[0].message.content or ""
         logger.debug("OpenRouter[%s] raw: %r", model_name, text[:200])
         return text.strip()
 
@@ -214,6 +357,91 @@ class LLMService:
         except ImportError:
             from app.services.gemini_client import generate  # type: ignore
         return generate(prompt)
+
+    def _create_chat_completion(self, client: Any, model_name: str, prompt: str, max_tokens: int) -> str:
+        completion = client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=max_tokens,
+            stream=getattr(self, "_stream_requested", False),
+        )
+        if getattr(self, "_stream_requested", False):
+            chunks: list[str] = []
+            for event in completion:
+                if not getattr(event, "choices", None):
+                    continue
+                delta = getattr(event.choices[0].delta, "content", None)
+                if delta:
+                    chunks.append(delta)
+            return "".join(chunks)
+        return completion.choices[0].message.content or ""
+
+    def _request_with_retry(self, provider_label: str, request_fn: Any) -> str:
+        last_exc: Optional[Exception] = None
+        for attempt in range(_RETRY_COUNT + 1):
+            try:
+                return request_fn()
+            except Exception as exc:
+                last_exc = exc
+                if attempt >= _RETRY_COUNT:
+                    break
+                logger.warning(
+                    "%s request failed (%s) - retry %d/%d",
+                    provider_label,
+                    exc,
+                    attempt + 1,
+                    _RETRY_COUNT,
+                )
+        raise last_exc if last_exc is not None else RuntimeError(f"{provider_label} failed")
+
+    def _log_fallback(
+        self,
+        agent_name: str,
+        provider: str,
+        model_name: str,
+        exc: Exception,
+        next_model: Optional[dict[str, Any]],
+    ) -> None:
+        agent_label = agent_name or "LLMService"
+        failure_kind = "timeout" if self._is_timeout_error(exc) else "error"
+        if next_model is None:
+            logger.error(
+                "[%s] %s %s on %s - no fallback remaining",
+                agent_label,
+                self._provider_label(provider),
+                failure_kind,
+                model_name,
+            )
+            return
+        logger.warning(
+            "[%s] %s %s - fallback %s",
+            agent_label,
+            self._provider_label(provider),
+            failure_kind,
+            self._fallback_target_label(next_model),
+        )
+
+    @staticmethod
+    def _provider_label(provider: str) -> str:
+        return "NIM" if provider == "nim" else "OpenRouter"
+
+    def _fallback_target_label(self, model_entry: dict[str, Any]) -> str:
+        provider = model_entry.get("provider", "")
+        model_name = str(model_entry.get("model", ""))
+        if provider == "openrouter":
+            return "OpenRouter"
+        if provider == "nim" and "v3.1" in model_name:
+            return "v3.1"
+        if provider == "nim" and "v3.2" in model_name:
+            return "v3.2"
+        return model_name or self._provider_label(provider)
+
+    @staticmethod
+    def _is_timeout_error(exc: Exception) -> bool:
+        name = exc.__class__.__name__.lower()
+        text = str(exc).lower()
+        return "timeout" in name or "timeout" in text or "timed out" in text
 
 
 # ---------------------------------------------------------------------------

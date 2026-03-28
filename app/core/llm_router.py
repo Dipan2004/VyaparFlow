@@ -16,11 +16,11 @@ Model entry shape:
 Routing strategy
 ----------------
                         primary                fallback-1              fallback-2
-intent      →  deepseek-v3.2 (nim)   deepseek-v3.1 (nim)    openrouter-fallback
-extraction  →  deepseek-v3.2 (nim)   deepseek-v3.1 (nim)    openrouter-fallback
+intent      →  deepseek-v3.2 (nim)   openrouter-fallback    deepseek-v3.1 (nim)
+extraction  →  deepseek-v3.2 (nim)   openrouter-fallback    deepseek-v3.1 (nim)
 planning    →  deepseek-v3.2 (nim)   openrouter-fallback     deepseek-v3.1 (nim)
 reasoning   →  deepseek-v3.2 (nim)   openrouter-fallback     deepseek-v3.1 (nim)
-default     →  deepseek-v3.2 (nim)   deepseek-v3.1 (nim)    openrouter-fallback
+default     →  deepseek-v3.2 (nim)   openrouter-fallback    deepseek-v3.1 (nim)
 
 Extending
 ---------
@@ -52,12 +52,12 @@ class ModelEntry(TypedDict):
 
 _NIM_PRIMARY  : ModelEntry = {
     "provider":   "nim",
-    "model":      os.getenv("NIM_PRIMARY_MODEL", "deepseek-ai/deepseek-v3"),
+    "model":      os.getenv("NIM_PRIMARY_MODEL", "deepseek-ai/deepseek-v3.2"),
     "max_tokens": None,
 }
 _NIM_FALLBACK : ModelEntry = {
     "provider":   "nim",
-    "model":      os.getenv("NIM_FALLBACK_MODEL", "deepseek-ai/deepseek-r1"),
+    "model":      os.getenv("NIM_FALLBACK_MODEL", "deepseek-ai/deepseek-v3.1"),
     "max_tokens": None,
 }
 _OPENROUTER   : ModelEntry = {
@@ -79,12 +79,12 @@ _OPENROUTER   : ModelEntry = {
 _ROUTES: dict[tuple[str, str], list[ModelEntry]] = {
 
     # Fast classification — intent detection
-    ("intentagent",      "classification"):  [_NIM_PRIMARY, _NIM_FALLBACK, _OPENROUTER],
-    ("intentagent",      ""):                [_NIM_PRIMARY, _NIM_FALLBACK, _OPENROUTER],
+    ("intentagent",      "classification"):  [_NIM_PRIMARY, _OPENROUTER, _NIM_FALLBACK],
+    ("intentagent",      ""):                [_NIM_PRIMARY, _OPENROUTER, _NIM_FALLBACK],
 
     # Structured extraction — needs reliable JSON output
-    ("extractionagent",  "extraction"):      [_NIM_PRIMARY, _NIM_FALLBACK, _OPENROUTER],
-    ("extractionagent",  ""):                [_NIM_PRIMARY, _NIM_FALLBACK, _OPENROUTER],
+    ("extractionagent",  "extraction"):      [_NIM_PRIMARY, _OPENROUTER, _NIM_FALLBACK],
+    ("extractionagent",  ""):                [_NIM_PRIMARY, _OPENROUTER, _NIM_FALLBACK],
 
     # Planning requires deeper reasoning
     ("planner",          "planning"):        [_NIM_PRIMARY, _OPENROUTER, _NIM_FALLBACK],
@@ -98,7 +98,7 @@ _ROUTES: dict[tuple[str, str], list[ModelEntry]] = {
 }
 
 # Default route when no specific entry is found
-_DEFAULT_ROUTE: list[ModelEntry] = [_NIM_PRIMARY, _NIM_FALLBACK, _OPENROUTER]
+_DEFAULT_ROUTE: list[ModelEntry] = [_NIM_PRIMARY, _OPENROUTER, _NIM_FALLBACK]
 
 
 # ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ const styles: Record<EntryType, string> = {
   DONE:    'bg-success/10 text-success border-success/20',
   FAIL:    'bg-destructive/10 text-destructive border-destructive/20',
   RETRY:   'bg-warning/10 text-warning border-warning/20',
+  WAIT:    'bg-muted/10 text-muted border-border',
 }
 
 export function Badge({ type, children, className = '' }: BadgeProps) {

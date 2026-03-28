@@ -43,6 +43,8 @@ def _build_registry() -> dict[str, "BaseAgent"]:
     from app.agents.intent_agent        import IntentAgent
     from app.agents.extraction_agent    import ExtractionAgent
     from app.agents.validation_agent    import ValidationAgent
+    from app.agents.invoice_agent       import InvoiceAgent
+    from app.agents.payment_agent       import PaymentAgent
     from app.agents.skill_router_agent  import SkillRouterAgent
     from app.agents.ledger_agent        import LedgerAgent
     # ── Phase 3: Autonomy Layer ──────────────────────────────────────────────
@@ -58,6 +60,8 @@ def _build_registry() -> dict[str, "BaseAgent"]:
         "intent":       IntentAgent(),
         "extraction":   ExtractionAgent(),
         "validation":   ValidationAgent(),
+        "invoice_agent": InvoiceAgent(),
+        "payment_agent": PaymentAgent(),
         "router":       SkillRouterAgent(),
         "ledger":       LedgerAgent(),
         # Autonomy layer agents

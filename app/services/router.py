@@ -50,7 +50,7 @@ _SKILL_MAP: dict[str, Any] = {
 # Public API
 # ---------------------------------------------------------------------------
 
-def route_to_skill(intent: str, data: dict) -> dict:
+def route_to_skill(intent: str, data: dict, context: dict | None = None) -> dict:
     """
     Route a structured business event to the appropriate skill.
 
@@ -80,4 +80,9 @@ def route_to_skill(intent: str, data: dict) -> dict:
         return {"event": "unhandled", "intent": intent, "data": data}
 
     logger.info("Routing intent '%s' to skill: %s", intent, skill_fn.__name__)
+    if context is not None:
+        try:
+            return skill_fn(data, context=context)
+        except TypeError:
+            pass
     return skill_fn(data)

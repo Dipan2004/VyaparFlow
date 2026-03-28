@@ -53,6 +53,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.event_bus import push_live_log
+
 
 # ---------------------------------------------------------------------------
 # Factory
@@ -71,6 +73,7 @@ def create_context(message: str, source: str = "system") -> dict[str, Any]:
     """
     return {
         "message":  message.strip(),
+        "source":   source,
         # ── Intent (Phase 5: multi-intent) ────────────────────────────────
         "intents":  [],     # all detected intents, ordered (set by IntentAgent)
         "intent":   None,   # primary intent = intents[0] — kept for backward compat
@@ -78,6 +81,10 @@ def create_context(message: str, source: str = "system") -> dict[str, Any]:
         "multi_data": {},   # per-intent extracted fields {intent_name: {fields}}
         "data":     {},     # primary intent extraction — kept for backward compat
         "event":    {},
+        "invoice":  None,
+        "payment":  None,
+        "events":   [],
+        "live_logs": [],
         "state":    "initialized",
         "history":  [],
         "errors":   [],
@@ -144,7 +151,7 @@ def log_step(
         input_keys:  Context keys the agent READ  (e.g. ["message"]).
         output_keys: Context keys the agent WROTE (e.g. ["intent", "state"]).
     """
-    ctx["history"].append({
+    entry = {
         "agent":       agent,
         "action":      action or f"{agent} executed",
         "input_keys":  input_keys  or [],
@@ -152,7 +159,9 @@ def log_step(
         "status":      status,
         "detail":      detail,
         "timestamp":   datetime.now(timezone.utc).isoformat(),
-    })
+    }
+    ctx["history"].append(entry)
+    push_live_log(ctx, entry)
 
 
 def add_error(ctx: dict[str, Any], error: str) -> None:

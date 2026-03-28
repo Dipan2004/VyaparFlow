@@ -55,13 +55,17 @@ class IntentAgent(BaseAgent):
             return context
 
         prompt  = self._load_prompt(message)
-        raw     = get_llm().generate(
-            prompt,
-            max_tokens = 96,
-            agent_name = self.name,
-            task_type  = "classification",
-            context    = context,
-        )
+        try:
+            raw = get_llm().generate(
+                prompt,
+                max_tokens=96,
+                agent_name=self.name,
+                task_type="classification",
+                context=context,
+            )
+        except Exception as exc:
+            logger.error("[IntentAgent] all LLM backends failed - defaulting to 'other': %s", exc)
+            raw = '{"intent": "other"}'
         intents = self._parse(raw)
         primary = intents[0]
 

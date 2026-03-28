@@ -33,7 +33,16 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Request
+from fastapi.responses import StreamingResponse
+from app.core.event_bus import (
+    confirm_invoice_payment,
+    emit_global_event,
+    get_events_since,
+    get_latest_event_sequence,
+    get_logs,
+    push_live_log,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +60,10 @@ class NotificationRequest(BaseModel):
     """Incoming notification payload."""
     source:  str = "system"   # e.g. "whatsapp", "amazon", "payment", "return"
     message: str              # Raw Hinglish business message
+
+
+class PaymentConfirmRequest(BaseModel):
+    invoice_id: str
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +128,14 @@ def _run_pipeline(message: str, source: str) -> dict[str, Any]:
         "intent":        result.get("intent", "other"),
         "data":          result.get("data", {}),
         "event":         result.get("event", {}),
+        "invoice":       result.get("invoice"),
+        "events":        result.get("events", []),
+        "live_logs":     result.get("live_logs", []),
+        "history":       result.get("history", ctx.get("history", [])),
+        "customer":      result.get("customer", {}),
+        "order":         result.get("order", {}),
+        "payment":       result.get("payment", {}),
+        "decision":      result.get("decision", {}),
         "source":        source,
         "sheet_updated": result.get("sheet_updated", False),
         "model":         model_tag,
@@ -130,6 +151,12 @@ def _run_pipeline(message: str, source: str) -> dict[str, Any]:
         "recovery":      result.get("recovery", {}),
         "monitor":       result.get("monitor", {}),
     }
+
+
+async def _broadcast_pipeline_response(response: dict[str, Any]) -> None:
+    await _manager.broadcast({"type": "pipeline_result", "data": response})
+    for event in response.get("events", []):
+        await _manager.broadcast({"type": "domain_event", "event": event})
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +187,7 @@ async def process_notification(body: NotificationRequest):
         "POST /api/notification | source=%s | msg=%r",
         body.source, body.message
     )
+    print("🔥 RECEIVED MESSAGE:", body.message)
 
     try:
         response = _run_pipeline(body.message.strip(), body.source)
@@ -168,8 +196,92 @@ async def process_notification(body: NotificationRequest):
         raise HTTPException(status_code=500, detail=f"Pipeline error: {exc}")
 
     # Broadcast full result to WebSocket clients
-    await _manager.broadcast(response)
+    await _broadcast_pipeline_response(response)
 
+    return response
+
+
+@router.get("/api/stream/logs")
+async def stream_logs(limit: int = Query(default=200, ge=1, le=500)):
+    return {"logs": get_logs(limit)}
+
+
+@router.get("/api/stream/events")
+async def stream_events(request: Request):
+    async def event_generator():
+        last_sequence = max(0, get_latest_event_sequence() - 20)
+        while True:
+            if await request.is_disconnected():
+                break
+
+            events = get_events_since(last_sequence)
+            for event in events:
+                last_sequence = max(last_sequence, int(event.get("sequence", 0)))
+                yield f"data: {json.dumps(event)}\n\n"
+
+            await asyncio.sleep(0.25)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/api/payment/confirm")
+async def confirm_payment(body: PaymentConfirmRequest):
+    invoice_id = body.invoice_id.strip()
+    if not invoice_id:
+        raise HTTPException(status_code=422, detail="invoice_id is required")
+
+    from app.utils.excel_writer import append_row
+
+    invoice = confirm_invoice_payment(invoice_id)
+    if invoice is None:
+        raise HTTPException(status_code=404, detail=f"Invoice not found: {invoice_id}")
+
+    payment_entry = {
+        "entry_id": f"PAY-{invoice_id}",
+        "timestamp": invoice.get("timestamp"),
+        "type": "payment",
+        "customer": invoice.get("customer"),
+        "item": invoice.get("item"),
+        "quantity": invoice.get("quantity"),
+        "amount": invoice.get("total") or invoice.get("total_amount"),
+        "payment_type": "manual",
+        "status": "received",
+    }
+    append_row("Ledger", payment_entry)
+
+    payment_log = push_live_log(None, {
+        "agent": "PaymentAPI",
+        "status": "success",
+        "action": f"Payment confirmed for {invoice_id}",
+        "detail": f"[PaymentAPI] Payment confirmed: {invoice_id}",
+    })
+    event = emit_global_event(
+        "payment_completed",
+        invoice,
+        agent="PaymentAPI",
+        step="payment",
+        message=f"Payment confirmed for {invoice_id}",
+        log_entry=payment_log,
+    )
+
+    response = {
+        "invoice": invoice,
+        "payment": {
+            "invoice_id": invoice.get("invoice_id"),
+            "amount": invoice.get("total") or invoice.get("total_amount"),
+            "status": "paid",
+        },
+        "event": event,
+    }
+    await _manager.broadcast({"type": "domain_event", "event": event})
     return response
 
 
@@ -231,7 +343,7 @@ async def websocket_notification_stream(websocket: WebSocket):
                     continue
 
                 response = _run_pipeline(message, source)
-                await _manager.broadcast(response)
+                await _broadcast_pipeline_response(response)
 
             except json.JSONDecodeError:
                 await websocket.send_json({"error": "Invalid JSON payload"})

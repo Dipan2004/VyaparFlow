@@ -24,7 +24,7 @@ class SkillRouterAgent(BaseAgent):
 
     name        = "SkillRouterAgent"
     input_keys  = ["intent", "data"]
-    output_keys = ["event", "state"]
+    output_keys = ["event", "invoice", "events", "state"]
     action      = "Dispatch to business skill and execute"
 
     def execute(self, context: dict[str, Any]) -> dict[str, Any]:
@@ -42,7 +42,12 @@ class SkillRouterAgent(BaseAgent):
         except ImportError:
             from app.services.router import route_to_skill  # type: ignore
 
-        event = route_to_skill(intent, data)
-        update_context(context, event=event, state="routed")
+        event = route_to_skill(intent, data, context=context)
+        update_context(
+            context,
+            event=event,
+            invoice=event.get("invoice", context.get("invoice")),
+            state="routed",
+        )
         logger.info("[SkillRouterAgent] event=%s", event.get("event"))
         return context

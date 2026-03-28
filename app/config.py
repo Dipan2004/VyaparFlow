@@ -40,20 +40,24 @@ DEMO_MODE = NOTIFLOW_DEMO_MODE  # legacy alias
 # NVIDIA NIM settings  (replaces AWS Bedrock)
 # ---------------------------------------------------------------------------
 
-NVIDIA_NIM_API_KEY : str | None = os.getenv("NVIDIA_NIM_API_KEY")
-NVIDIA_NIM_BASE_URL: str        = os.getenv(
-    "NVIDIA_NIM_BASE_URL", "https://integrate.api.nvidia.com/v1"
+NVIDIA_NIM_API_KEY : str | None = (
+    os.getenv("NVIDIA_NIM_API_KEY") or os.getenv("NVIDIA_API_KEY")
+)
+NVIDIA_NIM_BASE_URL: str        = (
+    os.getenv("NVIDIA_NIM_BASE_URL")
+    or os.getenv("NIM_BASE_URL")
+    or "https://integrate.api.nvidia.com/v1"
 )
 # Legacy single-model override (Phase 1-3 compat)
 NVIDIA_NIM_MODEL   : str        = os.getenv(
-    "NVIDIA_NIM_MODEL", "deepseek-ai/deepseek-v3"
+    "NVIDIA_NIM_MODEL", "deepseek-ai/deepseek-v3.2"
 )
 # Phase 4: per-role model routing
 NIM_PRIMARY_MODEL  : str        = os.getenv(
-    "NIM_PRIMARY_MODEL",  "deepseek-ai/deepseek-v3"
+    "NIM_PRIMARY_MODEL",  "deepseek-ai/deepseek-v3.2"
 )
 NIM_FALLBACK_MODEL : str        = os.getenv(
-    "NIM_FALLBACK_MODEL", "deepseek-ai/deepseek-r1"
+    "NIM_FALLBACK_MODEL", "deepseek-ai/deepseek-v3.1"
 )
 
 # ---------------------------------------------------------------------------

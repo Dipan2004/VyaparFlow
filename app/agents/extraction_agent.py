@@ -70,13 +70,17 @@ class ExtractionAgent(BaseAgent):
 
         # ── Single LLM call for all intents ──────────────────────────────
         prompt   = self._load_prompt(message, intents)
-        raw      = get_llm().generate(
-            prompt,
-            max_tokens = 400,
-            agent_name = self.name,
-            task_type  = "extraction",
-            context    = context,
-        )
+        try:
+            raw = get_llm().generate(
+                prompt,
+                max_tokens=400,
+                agent_name=self.name,
+                task_type="extraction",
+                context=context,
+            )
+        except Exception as exc:
+            logger.error("[ExtractionAgent] all LLM backends failed - using null extraction: %s", exc)
+            raw = "{}"
         multi_data = self._parse(raw, intents)
 
         update_context(context,

@@ -1,0 +1,6 @@
+﻿src/components/center/LogStream.tsx(2,30): error TS6133: 'Layers' is declared but its value is never read.
+src/components/right/TransactionDashboard.tsx(2,1): error TS6133: 'motion' is declared but its value is never read.
+src/components/right/TransactionDashboard.tsx(4,45): error TS6133: 'AlertTriangle' is declared but its value is never read.
+src/components/right/TransactionDashboard.tsx(4,60): error TS6133: 'ShieldAlert' is declared but its value is never read.
+src/components/right/TransactionDashboard.tsx(20,44): error TS6133: 'processingTimeMs' is declared but its value is never read.
+src/components/right/TransactionDashboard.tsx(20,62): error TS6133: 'source' is declared but its value is never read.

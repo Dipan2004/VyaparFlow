@@ -1,0 +1,3 @@
+﻿src/components/right/TransactionDashboard.tsx(4,96): error TS6133: 'Hash' is declared but its value is never read.
+src/components/right/TransactionDashboard.tsx(26,9): error TS6133: 'intentsString' is declared but its value is never read.
+src/components/right/TransactionDashboard.tsx(132,67): error TS2304: Cannot find name 'CheckCircle'.

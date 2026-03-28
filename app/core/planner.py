@@ -20,7 +20,8 @@ Plan output shape (written to context["plan"]):
         {"agent": "intent",     "critical": True},
         {"agent": "extraction", "critical": True},
         {"agent": "validation", "critical": True},
-        {"agent": "router",     "critical": True},
+        {"agent": "invoice_agent", "critical": True},
+        {"agent": "payment_agent", "critical": True},
         {"agent": "ledger",     "critical": False},
     ]
 
@@ -94,9 +95,14 @@ def _validation_needed(ctx: dict[str, Any]) -> bool:
     return ctx.get("state") != "validated"
 
 
-def _routing_needed(ctx: dict[str, Any]) -> bool:
-    """Run skill router unless a skill event already exists."""
-    return not ctx.get("event")
+def _invoice_needed(ctx: dict[str, Any]) -> bool:
+    """Generate an invoice for order workflows when not already present."""
+    return (ctx.get("intent") or "").lower() == "order" and not ctx.get("invoice")
+
+
+def _payment_needed(ctx: dict[str, Any]) -> bool:
+    """Create pending payment state after invoice generation."""
+    return (ctx.get("intent") or "").lower() == "order" and not ctx.get("payment")
 
 
 def _ledger_needed(ctx: dict[str, Any]) -> bool:
@@ -127,10 +133,16 @@ _RULES: list[PlanRule] = [
         description = "Normalise and validate extracted data",
     ),
     PlanRule(
-        agent       = "router",
-        condition   = _routing_needed,
+        agent       = "invoice_agent",
+        condition   = _invoice_needed,
         critical    = True,
-        description = "Route to business skill and execute",
+        description = "Generate structured invoice from validated data",
+    ),
+    PlanRule(
+        agent       = "payment_agent",
+        condition   = _payment_needed,
+        critical    = True,
+        description = "Prepare pending payment workflow",
     ),
     PlanRule(
         agent       = "ledger",

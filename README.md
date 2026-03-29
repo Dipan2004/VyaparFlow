@@ -1,4 +1,4 @@
-# 🚀 VyaparFlow
+#  VyaparFlow
 
 An **autonomous multi-agent business workflow system** that transforms simple WhatsApp-style messages into complete business operations — in real time.
 
